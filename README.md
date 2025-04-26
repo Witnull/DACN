@@ -2,13 +2,13 @@
 
 ## Dependencies
 
-Python 3.12.10
-CUDA 12.6
-torch 2.6.0
-Appium 2.17.0
-Appium-Python-Client 5.0.0
-Android Studio - Meerkat
-Jdk 17
+- Python 3.12.10
+- CUDA 12.6
+- torch 2.6.0
+- Appium 2.17.0
+- Appium-Python-Client 5.0.0
+- Android Studio - Meerkat
+- Jdk 17
 
 ... For more libraries details please read in `req.txt`
 
