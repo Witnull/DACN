@@ -1,0 +1,9 @@
+jdk-17.0.12_windows-x64_bin/*
+venv/*
+guides.markdown
+app/*
+*.dot
+*.png
+*/__pycache__/*
+*.pth
+*.pyc
