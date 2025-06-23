@@ -1,0 +1,14 @@
+# View code flow https://pypi.org/project/code2flow/
+
+code2flow .\experiments\ main.py --language py --exclude-functions setup_logger --output code_base_v2.dot
+
+# View : 
+https://dreampuf.github.io/GraphvizOnline/
+https://edotor.net/
+
+# Monkey : https://developer.android.com/studio/test/other-testing-tools/monkey
+
+# Code cov:
+ACVTool[Q1 https://dl.acm.org/doi/10.1145/3395042] :https://github.com/pilgun/acvtool
+Jacoco : https://github.com/jacoco/jacoco?tab=readme-ov-file
+AndroLog: https://github.com/JordanSamhi/AndroLog

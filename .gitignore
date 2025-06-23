@@ -4,6 +4,13 @@ guides.markdown
 app/*
 *.dot
 *.png
-*/__pycache__/*
+*__pycache__*
 *.pth
 *.pyc
+not_important
+Logs
+external_tools/*
+wd 
+venv/
+apk
+.vscode

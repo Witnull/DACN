@@ -66,7 +66,7 @@ def setup_logger(log_file, emulator_name :str = "Unk", app_name: str = "Unk") ->
         
         # Console handler
         console_handler = logging.StreamHandler()
-        console_handler.setLevel(logging.WARNING)
+        console_handler.setLevel(logging.INFO)
         console_handler.setFormatter(ColoredFormatter())
         
         # Add handlers to logger

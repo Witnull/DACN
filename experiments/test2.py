@@ -14,6 +14,7 @@ import torch.nn.functional as F
 
 from torch.utils.data import Dataset, DataLoader
 import hashlib
+from experiments.utils.prioritized_replay_buffer import PrioritizedReplayBuffer # Import PER
 
 def hash_tensor(t: torch.Tensor) -> str:
     return hashlib.md5(t.cpu().numpy().tobytes()).hexdigest()
@@ -55,8 +56,23 @@ class MacroSequenceDataset(Dataset):
 
     def _prepare_data(self, buffer):
         sequence = []
-        for i in range(len(buffer)):
-            state, _, _, _, done, action_vecs = buffer[i]
+        # Iterate through the buffer to extract sequences
+        # If using PrioritizedReplayBuffer, we need to get the actual experiences
+        # This assumes the buffer stores (state, action_idx, reward, next_state, done, action_vectors)
+        # If buffer is PER, it stores (priority, (state, ...))
+        
+        # For PER, we need to extract the actual experiences from the SumTree
+        # This is a simplified way to get all experiences, not efficient for large buffers
+        if isinstance(buffer, PrioritizedReplayBuffer):
+            all_experiences = []
+            for i in range(buffer.tree.n_entries):
+                _, _, experience = buffer.tree.get(buffer.tree.total() * (i / buffer.tree.n_entries))
+                all_experiences.append(experience)
+        else:
+            all_experiences = buffer # Assume it's a deque
+
+        for i in range(len(all_experiences)):
+            state, _, _, _, done, action_vecs = all_experiences[i]
             if action_vecs:
                 sequence.append((state, action_vecs))
             if done or len(sequence) >= self.max_seq_len:
@@ -240,8 +256,8 @@ class DQNAgent:
         self.macro_manager = MacroManager(sequence_generator=self.macro_generator, state_graph=self.stgraph)
 
 
-        # prioritized buffer stub (can be upgraded)
-        self.memory = deque(maxlen=10000)
+        # Prioritized Replay Buffer
+        self.memory = PrioritizedReplayBuffer(capacity=10000)
 
        
         self.gamma = 0.99
@@ -281,7 +297,7 @@ class DQNAgent:
     def store(self, state: torch.Tensor, action_idx: int, reward: float, next_state: torch.Tensor, done: bool, action: Dict[str, Any] = None):
         """Store transition in memory and update graph."""
         state = state.to(self.device)
-        next_state = next_state.to(self.device) if next_state is not None else torch.zeros(state.size(dim=0), device=self.device) # Ensure next_state is a tensor
+        next_state = next_state.to(self.device) if next_state is not None else torch.zeros(self.state_dim, device=self.device) # Ensure next_state is a tensor
         # self.logger.info(f"State: {state}")
         # self.logger.info(f"ActionIdx: {action_idx}")
         # self.logger.info(f"Reward: {reward}")
@@ -291,15 +307,20 @@ class DQNAgent:
 
         #print(f"State: {state}, Action: {action_idx}, Reward: {reward}, Next State: {next_state}, Done: {done}")
         reward = reward/1000.0
-        self.memory.append((state, action_idx, reward, next_state, done, action))
+        # Calculate initial priority (e.g., max priority or a small positive value)
+        max_p = self.memory.tree.total() if self.memory.tree.n_entries > 0 else 1.0
+        self.memory.add(max_p, (state, action_idx, reward, next_state, done, action))
        
 
     def train(self):
-        if len(self.memory) % self.batch_size != 0:
+        if len(self.memory) < self.batch_size:
             return
         self.step_count += 1
-        batch = random.sample(self.memory, self.batch_size)
-        states, actions, rewards, next_states, dones, next_action_vectors = zip(*batch)
+        
+        # Sample from PER buffer
+        batch_data = self.memory.sample(self.batch_size)
+        indices, experiences = zip(*batch_data)
+        states, actions, rewards, next_states, dones, next_action_vectors = zip(*experiences)
 
         states = torch.stack(states).to(self.device)
         actions = torch.tensor(actions, dtype=torch.long, device=self.device)
@@ -315,7 +336,7 @@ class DQNAgent:
         
         av_batch = []
         for nav in next_action_vectors:
-            if not nav:
+            if nav is None:
                 # Use a zero tensor with the same shape as other action vectors
                 default_action = torch.zeros(self.action_vector_dim, device=self.device)
                 av_batch.append(default_action.unsqueeze(0))
@@ -347,6 +368,11 @@ class DQNAgent:
 
         # Compute Q-learning loss
         loss = self.loss_fn(q_current, target)
+
+        # Compute TD-error for PER update
+        td_error = torch.abs(target - q_current).cpu().numpy()
+        for i, idx in enumerate(indices):
+            self.memory.update(idx, td_error[i])
 
         # Compute ICM loss BEFORE backward
         icm_loss_total = 0
@@ -386,21 +412,40 @@ class DQNAgent:
     def save_replay_buffer(self, path: str, reward_threshold: float = 500.0):
         os.makedirs(os.path.dirname(path), exist_ok=True)
         try:
-            data = [t for t in self.memory if t[2] > reward_threshold]
+            # For PER, we save the entire SumTree structure or reconstruct it from data
+            # For simplicity, let\'s save the raw experiences for now.
+            # A more robust solution would serialize the SumTree.
+            data = []
+            for i in range(self.memory.tree.n_entries):
+                _, _, experience = self.memory.tree.get(self.memory.tree.total() * (i / self.memory.tree.n_entries))
+                data.append(experience)
+            
+            # Filter by reward threshold if needed, but for PER, all experiences are valuable
+            # data = [t for t in data if t[2] > reward_threshold]
+
             with open(path, 'wb') as f:
                 pickle.dump(data, f)
-            self.logger.info(f"Saved {len(data)} transitions")
+            self.logger.info(f"Replay buffer saved: {path} with {len(data)} entries.")
         except Exception as e:
             self.logger.error(f"Error saving replay buffer: {e}")
 
     def load_replay_buffer(self, path: str):
         if not os.path.exists(path):
-            self.logger.error(f"No buffer at {path}")
+            self.logger.error(f"No replay buffer at {path}")
             return
         try:
             with open(path, 'rb') as f:
-                buff = pickle.load(f)
-            self.memory = deque(buff[-self.memory.maxlen:], maxlen=self.memory.maxlen)
-            self.logger.info(f"Loaded {len(self.memory)} transitions")
+                data = pickle.load(f)
+            
+            # Reconstruct PER buffer from loaded data
+            self.memory = PrioritizedReplayBuffer(capacity=10000) # Re-initialize
+            for experience in data:
+                # Add with a default high priority, or re-calculate if possible
+                self.memory.add(1.0, experience) # Add with max priority
+            
+            self.logger.info(f"Replay buffer loaded: {path} with {len(data)} entries.")
         except Exception as e:
             self.logger.error(f"Error loading replay buffer: {e}")
+
+
+

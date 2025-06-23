@@ -39,7 +39,7 @@ class ActionExtractor:
         clickable_elements = root.findall(".//*[@clickable='true']")
         for element in clickable_elements:
             widget_key = (element.get('class'), element.get('text', ''))
-            if widget_key in widget_dict:  # This line fails if widget_dict is None
+            if widget_key in widget_dict:  
                 widget_index = widget_dict[widget_key]
                 action = {'type': 'touch', 'widget_index': widget_index, 'parameters': None}
                 actions.append(action)

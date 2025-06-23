@@ -1,3 +1,4 @@
+import hashlib
 import torch
 from lxml import etree as ET
 from experiments.logger import setup_logger
@@ -58,74 +59,223 @@ class GUIEmbedder:
             else:
                 return 0  # Default index if max reached
         return self.activity_dict[activity]
+    
+    def get_widget_index(self, widget_key: tuple) -> int:
+            if widget_key not in self.widget_dict:
+                if len(self.widget_dict) < self.max_widgets:
+                    self.widget_dict[widget_key] = len(self.widget_dict)
+                else:
+                    return 0  # Default index if limit reached
+            return self.widget_dict[widget_key]
 
-    def embed(self, gui_hierarchy: str) -> torch.Tensor:
+    def hash_md5(self, text: str = "aaaa") -> str:
+        return hashlib.md5(text.encode('utf-8')).hexdigest()
+    # MAIN FUNCTION TO EMBED GUI
+    def embed(self, gui_hierarchy: str, current_activity : str) -> torch.Tensor:
+        # DQT
+        # GUI EMBEDDING: Embedding the GUI hierarchy into:
+        # Action EMBEDDING:
+            # Node vector of wigets [Bounds t-l-b-r-center, 5 ][1hot 7 - event executability (i.e., click-
+            # able, long-clickable, checkable, and scrollable) and three for widget
+            # status (i.e., enable, checked, and password), 7] [Content-Free Text Attributes-normalized 8 digit hash, 8]
+            # [Content-Related Text Attributes, text and content-desc
+            # are compressed to 32 and 16 dimensions via paraphrase-multilingual-MiniLM-L12-v2 trained
+            # by Sentence Transformers ] => len = 77
+            # 9 Actions: [1-hot] click, long-click, edit via number, edit via text, scroll in four different directions, and back.
+            # Widget vector (node) length = 77 
+            # Action vector length = Widget vector length  + 9 Actions (1 hot) 2nd time = 86
+        # State EMBEDDING:
+            # Graph widget vector (node) and action lead to 
+            # GNN trainning 
+
         try:
+            activity_vector = torch.zeros(self.max_activities)
+            widget_vector = torch.zeros(self.max_widgets)
             # Parse the GUI XML
             root = ET.fromstring(gui_hierarchy.encode('utf-8'))
-            current_activity = root.get('activity', 'unknown')
+            
+            self.logger.debug(f"Current Activity: {current_activity}")
             
             # Find interactive elements
-            clickable_elements = (
+            interactive_elements = (
                 root.findall(".//*[@clickable='true']") +
+                root.findall(".//*[@long-clickable='true']") + root.findall(".//*[@longClickable='true']") +
                 root.findall(".//*[@scrollable='true']") +
+                root.findall(".//*[@checkable='true']") +  # Original 4 event executabile
+
+                root.findall(".//*[@context-clickable='true']") +
+                root.findall(".//*[@focusable='true']") +
                 root.findall(".//*[@class='android.widget.EditText']")
             )
 
-            # Encode the activity (screen)
+            # Log the number of interactive elements found
+            self.logger.debug(f"Found {len(interactive_elements)} interactive elements")
+
+            # Encode the activity (screen) to 1 hot
             activity_index = self.get_activity_index(current_activity)
-            activity_vector = torch.zeros(self.max_activities)
+            self.logger.debug(f"Activity index: {activity_index} (out of {self.max_activities})")
             activity_vector[activity_index] = 1
+            
             semantic_vectors = []
 
             # Encode widgets
-            widget_vector = torch.zeros(self.max_widgets)
-            for element in clickable_elements:
-                widget_type = element.get('class', '')
-                if 'EditText' in widget_type:
-                    # Use resource-id for text inputs, ignore text
-                    widget_id = element.get('resource-id', '')
-                    widget_key = (widget_type, widget_id)
-                else:
-                    # Use text for other widgets
-                    widget_text = element.get('text', '')
-                    widget_key = (widget_type, widget_text)
+            self.logger.debug("Interactive elements details:")
+            processed_widgets = []
+            for i, element in enumerate(interactive_elements):
+                widget_type = element.get('class', 'unknown') or element.get('className', 'unknown')
+                widget_id = element.get('resource-id', 'unknown') or element.get('resourceId', 'unknown')
+                widget_hash = self.hash_md5(widget_id + widget_type)
+
+                widget_bounds = element.get('bounds', 'unknown') # [top,left] [botton,right]
+                widget_coords = [0,0,0,0,0,0]
+            
+                widget_status = [
+                    int(element.get('enabled', 'false').lower() == 'true'), 
+                    int(element.get('checked', 'false').lower() == 'true'), 
+                    int(element.get('password', 'false').lower() == 'true') 
+                ]
+
+                widget_events = [
+                    int(element.get('clickable', 'false').lower() == 'true'),  
+                    int(element.get('long-clickable', 'false').lower() == 'true' or element.get('longClickable', 'false').lower() == 'true'),  
+                    int(element.get('scrollable', 'false').lower() == 'true'),  
+                    int(element.get('focusable', 'false').lower() == 'true'),  
+                    int(element.get('context-clickable', 'false').lower() == 'true')  
+                ]
+                widget_input_type = 'none' 
+
+                # calculate center of bounds
+                if widget_bounds != 'unknown':
+                    bounds = widget_bounds.replace('][', ',').replace('[', '').replace(']', '').split(',')
+                    if len(bounds) == 4:
+                        top, left, bottom, right = map(int, bounds)
+                        center_x = (left + right) / 2
+                        center_y = (top + bottom) / 2
+                        widget_coords = [top,left,bottom,right,center_x,center_y]
                 
                 # Map the widget to an index
-                widget_index = self.get_widget_index(widget_key)
+                widget_index = self.get_widget_index(widget_hash)
                 widget_vector[widget_index] = 1
-                text_content = element.get('text', '') or element.get('content-desc', '')
+                text_content = "TEXT:" + (element.get('text', '') + element.get('name',"")) + "/DESC:" + (element.get('content-desc', '')+ element.get('contentDescription', ''))
+                if not text_content.strip():
+                    text_content = "none"
+
+                if 'EditText' in widget_type:
+                    mapping_types = {
+                        '1':'text',  # Default text input
+                        '2':'number',
+                        '3':'phone',
+                        '4':'date-time',
+                        '128':'password',
+                        '32':'email',
+                    }
+                    if element.get('inputType', '1') in mapping_types:
+                        widget_input_type = mapping_types[element.get('inputType', '1')]
+                    
+                    
+                # Record widget details for logging
+                widget_info = {
+                    "id": widget_hash,
+                    "type": widget_type,
+                    "text": text_content, 
+                    "input_type": widget_input_type,   
+                    "status": widget_status, #array
+                    "events":  widget_events,#array
+                    "bounds": widget_coords, #array
+                    "vector_index": widget_index
+                }
+                processed_widgets.append(widget_info)
+                
                 if text_content:
                     semantic_vectors.append(self.get_text_embedding(text_content))
-
             
+            # Log processed widgets in a readable format
+            if processed_widgets:
+                self.logger.debug("Widget details :")
+                for i, widget in enumerate(processed_widgets):
+                    self.logger.debug(f"Widget {i}: {widget}")
+                    
             orientation = self.get_device_orientation()
             network = self.get_network_status()
             focused_text = 1 if any(element.get('focused') == 'true' and 'EditText' in element.get('class', '') for element in root.findall(".//*")) else 0
             scrollable = 1 if any(element.get('scrollable') == 'true' for element in root.findall(".//*")) else 0
             additional_features = torch.tensor([orientation, network, focused_text, scrollable], dtype=torch.float32)
+            self.logger.debug(f"Device features: orientation={orientation}, network={network}, focused_text={focused_text}, scrollable={scrollable}")
 
             # Combine into full state vector (add other features as needed)
-            #state_vector = torch.cat((activity_vector, widget_vector, additional_features))
             if semantic_vectors:
                 semantic_vector = torch.mean(torch.stack(semantic_vectors), dim=0)
+                self.logger.debug(f"Created semantic vector from {len(semantic_vectors)} text elements")
             else:
                 semantic_vector = torch.zeros(self.semantic_dim)
+                self.logger.debug("No text found, using zero semantic vector")
+                
             state_vector = torch.cat((activity_vector, #500
                                       widget_vector,  #50
                                       additional_features,  #4 
                                       semantic_vector)) #384 
-
+            
+            self.logger.debug(f"Final state vector shape: {state_vector.shape}, non-zero elements: {torch.sum(state_vector != 0).item()}")
             return state_vector
 
         except Exception as e:
             self.logger.error(f"Error in GUI embedding: {str(e)}")
             return torch.zeros(self.state_dim)
 
-    def get_widget_index(self, widget_key: tuple) -> int:
-        if widget_key not in self.widget_dict:
-            if len(self.widget_dict) < self.max_widgets:
-                self.widget_dict[widget_key] = len(self.widget_dict)
-            else:
-                return 0  # Default index if limit reached
-        return self.widget_dict[widget_key]    
+    
+
+    def visualize_state(self, state_vector: torch.Tensor, show_details: bool = False) -> str:
+        """
+        Creates a human-readable representation of the state vector.
+        
+        Args:
+            state_vector: The state vector to visualize
+            show_details: Whether to show the detailed breakdown of the vector
+            
+        Returns:
+            A string representation of the state
+        """
+        # Extract the different components of the state vector
+        activity_vector = state_vector[:self.max_activities]
+        widget_vector = state_vector[self.max_activities:self.max_activities + self.max_widgets]
+        additional_features = state_vector[self.max_activities + self.max_widgets:self.max_activities + self.max_widgets + 4]
+        semantic_vector = state_vector[self.max_activities + self.max_widgets + 4:]
+        
+        # Find the active activity
+        active_activity_idx = torch.argmax(activity_vector).item()
+        active_activity = "unknown"
+        for activity, idx in self.activity_dict.items():
+            if idx == active_activity_idx:
+                active_activity = activity
+                break
+        
+        # Find active widgets
+        active_widget_indices = torch.nonzero(widget_vector).flatten().tolist()
+        active_widgets = []
+        for widget_key, widget_idx in self.widget_dict.items():
+            if widget_idx in active_widget_indices:
+                widget_type, widget_text = widget_key
+                active_widgets.append((widget_type, widget_text))
+        
+        # Get device state information
+        orientation = "Portrait" if additional_features[0].item() == 0 else "Landscape"
+        network = "On" if additional_features[1].item() == 1 else "Off"
+        focused_text = "Yes" if additional_features[2].item() == 1 else "No"
+        scrollable = "Yes" if additional_features[3].item() == 1 else "No"
+        
+        # Create a summary string
+        summary = [
+            f"Current Activity: {active_activity}",
+            f"Interactive Elements: {len(active_widgets)}",
+            f"Device State: Orientation={orientation}, Network={network}, Text Input Focus={focused_text}, Scrollable Content={scrollable}",
+            f"Semantic Content: {'Present' if torch.sum(semantic_vector).item() > 0 else 'None'}"
+        ]
+        
+        if show_details and active_widgets:
+            summary.append("\nInteractive Elements:")
+            for i, (widget_type, widget_text) in enumerate(active_widgets):
+                type_name = widget_type.split('.')[-1] if '.' in widget_type else widget_type
+                text_preview = widget_text[:30] + '...' if len(widget_text) > 30 else widget_text
+                summary.append(f"  {i+1}. {type_name}: '{text_preview}'")
+        
+        return "\n".join(summary)
