@@ -2,13 +2,13 @@
 
 ## Dependencies
 
-Python 3.12.10
-CUDA 12.6
-torch 2.6.0
-Appium 2.17.0
-Appium-Python-Client 5.0.0
-Android Studio - Meerkat
-Jdk 17
+- Python 3.12.10
+- CUDA 12.6
+- torch 2.6.0
+- Appium 2.17.0
+- Appium-Python-Client 5.0.0
+- Android Studio - Meerkat
+- Jdk 17
 
 ... For more libraries details please read in `req.txt`
 
@@ -44,13 +44,14 @@ The current directories of project are as follow, the one that merked as (done) 
 
 ```
 ## How to use
-
-1 - Create venv 
-2 - Install python libraries
-3 - Install Appium, Android studio
-4 - Install Appium doctor to check for missing stuff - maybe add ANDROID_HOME and JAVA_HOME to environment vars
-5 - Install Jdk
-6 - Get some sample apk
-7 - Edit the `main.py`
-8 - Run the `main.py`
-9 - Debug 
+```
+  1 - Create venv 
+  2 - Install python libraries
+  3 - Install Appium, Android studio
+  4 - Install Appium doctor to check for missing stuff - maybe add ANDROID_HOME and JAVA_HOME to environment vars
+  5 - Install Jdk
+  6 - Get some sample apk
+  7 - Edit the `main.py`
+  8 - Run the `main.py`
+  9 - Debug 
+```
