@@ -12,3 +12,22 @@ https://edotor.net/
 ACVTool[Q1 https://dl.acm.org/doi/10.1145/3395042] :https://github.com/pilgun/acvtool
 Jacoco : https://github.com/jacoco/jacoco?tab=readme-ov-file
 AndroLog: https://github.com/JordanSamhi/AndroLog
+
+
+# APPLIED:
+.
+├── [] MetaControl - Need implement - Target action selection ("navigate", "input", "backtrace")/
+│   └── [] Double DuelDQN - basic sub-action selection ("click", "long-click", "swipe","edit_text")
+├── [] Reward - What will be predicted in Q gamma=0.95?/
+│   └── meta_reward - [] not yet -shaping this /
+│       └── reward_d-2ddqn []Need to clipping/ smoothing
+├── [] The "done" attr formulate
+├── [] Revise of q_value - should be low td_errors
+├── [] Optimize the steps - More episode as it now rely on MetaControl
+├── [] The 50 train after 50 steps - collect k step and train N interations/
+│   └── [] Revis training replay - sliding window
+├── [] optimize epsilon - higher,more random (begin) - lower, rely on q_value (later)
+├── State - ok for now
+├── Action Space - ok for now
+└── Action - ok for now
+ 

@@ -60,7 +60,7 @@ def setup_logger(log_file, emulator_name :str = "Unk", app_name: str = "Unk") ->
     # Avoid duplicate handlers
     if not logger.handlers:
         # File handler
-        file_handler = logging.FileHandler(log_file)
+        file_handler = logging.FileHandler(log_file, mode='a', encoding='utf-8')
         file_handler.setLevel(logging.DEBUG)
         file_handler.setFormatter(ColoredFormatter())
         

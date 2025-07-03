@@ -221,7 +221,7 @@ class DuelingDQN(nn.Module):
 
 class DQNAgent:
     def __init__(self, state_dim: int, action_vector_dim: int, log_dir: str = "app/logs/",
-                 emulator_name: str = "Unknown", app_name: str = "Unknown"):
+                emulator_name: str = "Unknown", app_name: str = "Unknown"):
         self.state_dim = state_dim
         self.action_vector_dim = action_vector_dim
         self.hidden_state = None
@@ -276,9 +276,11 @@ class DQNAgent:
         # av = torch.stack(action_vectors).to(self.device).unsqueeze(0)  # [1, num_actions, action_vector_dim]
         # qvals = self.policy_net(sv, av).squeeze(0)  # [num_actions]
         # return torch.argmax(qvals).item()
-       
-    def act(self, state: torch.Tensor, actions: List[Dict[str, Any]], action_vectors: List[torch.Tensor]) -> int:
-        sv = state.to(self.device).unsqueeze(0)
+        
+    def action_possiblity_calc(self, action_vector: torch.Tensor, state_vector: torch.Tensor, actions: list[Dict]) -> int:
+        av = action_vector.to(self.device).unsqueeze(0)
+        sv = state_vector.to(self.device).unsqueeze(0)
+        
         av = torch.stack(action_vectors).to(self.device).unsqueeze(0)
 
         state_hash = hash_tensor(state)
@@ -310,7 +312,7 @@ class DQNAgent:
         # Calculate initial priority (e.g., max priority or a small positive value)
         max_p = self.memory.tree.total() if self.memory.tree.n_entries > 0 else 1.0
         self.memory.add(max_p, (state, action_idx, reward, next_state, done, action))
-       
+        
 
     def train(self):
         if len(self.memory) < self.batch_size:

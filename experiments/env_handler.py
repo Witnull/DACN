@@ -1,25 +1,25 @@
 import os
+import random
 import sys
 import time
-import subprocess
 import pathlib as pathlib
-from typing import Dict, Any
+import traceback
 from selenium.common.exceptions import WebDriverException
 from experiments.logger import setup_logger
-from experiments.action_extractor import ActionExtractor
-from experiments.gui_embedder import GUIEmbedder
-from experiments.reward_analyzer import RewardAnalyzer
-from experiments.test2 import DQNAgent, train_macro_generator
+from selenium.common.exceptions import NoSuchElementException
+from selenium.webdriver.common.action_chains import ActionChains
+from selenium.webdriver.common.actions.pointer_input import PointerInput
+from selenium.webdriver.common.actions.interaction import Interaction
+from selenium.webdriver.support.ui import WebDriverWait
+
+
+
+# from experiments.duel_dqn_2 import DQNAgent, train_macro_generator
 from experiments.utils.apk_analyzer import apk_analyzer
 from experiments.utils.emulator_n_appium_controller import (
     EmulatorController,
     AppiumManager,
 )
-from experiments.utils.path_config import (
-    ADB_PATH,
-)
-from experiments.logcat_extractor import LogcatExtractor
-from lxml import etree as ET
 from acvtool.acvtool import get_parser, run_actions
 
 # command_map = {
@@ -48,39 +48,31 @@ log_time = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
 
 class EnviromentHandler:
     def __init__(
-        self, emulator_name: str, emulator_port: str, appium_port: int, apk_path: str
+        self,
+        emulator_name: str,
+        emulator_port: str,
+        appium_port: int,
+        apk_path: str,
+        master_log_dir: str,
+        ver: str,
     ):
         self.emulator_name = emulator_name
         self.appium_port = appium_port
         self.emulator_port = emulator_port
         self.apk_path = apk_path
-        self.app_name = pathlib.Path(apk_path).name.split(".")[0]
+        self.app_name = "-".join(pathlib.Path(apk_path).name.split("."))
         self.acv_intructed_apk_path = ""  # path to the instrumented apk, will define after ACVTool instrumentation
-        # Environment paths
-        self.adb_path = ADB_PATH
-
-        # APK analysis results
-        self.debuggable = False
-        self.uses_cleartext_traffic = False
-        self.permissions = []
         # Logging setup
-        self.ver = "t" + str(log_time)
+        self.ver = ver
 
         # Create directories for logs and models
-        self.master_log_dir = f"Logs/{self.emulator_name}_{self.app_name}_{self.ver}"
-        os.makedirs(self.master_log_dir, exist_ok=True)
-        self.model_dir = f"{self.master_log_dir}/model"
-        os.makedirs(self.model_dir, exist_ok=True)
+        self.master_log_dir = master_log_dir
         self.inst_apk_dir = "apk/instr"
         os.makedirs(self.inst_apk_dir, exist_ok=True)
         self.acv_workdir = "apk/instr/acv_temp"  # will set after apk analyze
 
-        # Set saving paths
-        self.model_path = f"{self.model_dir}/model_{self.ver}.pth"
-        self.replay_buffer_path = f"{self.model_dir}/replay_buffer_{self.ver}.pkl"
-
         self.logger = setup_logger(
-            f"{self.master_log_dir}/emulator_handler.log",
+            f"{self.master_log_dir}/env_handler.log",
             emulator_name=self.emulator_name,
             app_name=self.app_name,
         )
@@ -98,53 +90,8 @@ class EnviromentHandler:
             app_name=self.app_name,
         )
 
-        ##############################################
-        # Initialize/set model variables
-        #
-        ##############################################
-
-        self.max_activities = 50  # Maximum number of activities to track
-        self.max_widgets = 300  # Maximum number of widgets to track
-        self.max_orientation = 4  # up down left right
-        # State dimemsion calculation
-        self.state_dim = (
-            self.max_activities + self.max_widgets + 4 + 384
-        )  # +4 for orientation, network, focused_text, scrollable
-
-        self.action_vector_dim = 15  # Fixed action vector size
-
-        # Initialize components
-        self.gui_embedder = GUIEmbedder(
-            log_dir=self.master_log_dir,
-            emulator_name=self.emulator_name,
-            app_name=self.app_name,
-            max_activities=self.max_activities,
-            max_widgets=self.max_widgets,
-        )
-
-        self.dqn_agent = DQNAgent(
-            state_dim=self.state_dim,
-            action_vector_dim=self.action_vector_dim,
-            log_dir=self.master_log_dir,
-            emulator_name=self.emulator_name,
-            app_name=self.app_name,
-        )
-
-        self.action_extractor = None  # Initialized after driver setup
-
-        self.reward_analyzer = RewardAnalyzer(
-            log_dir=self.master_log_dir,
-            emulator_name=self.emulator_name,
-            app_name=self.app_name,
-            gui_embedder=self.gui_embedder,
-            debuggable=self.debuggable,
-            uses_cleartext_traffic=self.uses_cleartext_traffic,
-            permissions=self.permissions,
-        )
-
         self.device_name = None  # Will be set after emulator starts
-        self.logcat_extractor = None  # Will be initialized after emulator starts
-
+        self.number_of_activities = set()
         self.acv_parser = get_parser()
 
         ###################################### EO__init__
@@ -163,9 +110,9 @@ class EnviromentHandler:
                 self.providers,
                 self.app_package,
             ) = apk_analyzer(self.apk_path)
-
+            self.number_of_activities = self.exported_activities
             self.logger.info(
-                f"APK analysis completed: \nExported Activities: {self.exported_activities}\n Services: {self.services}\n Receivers: {self.receivers}\n Providers: {self.providers}\n String Activities: {self.string_activities}\n App Package: {self.app_package}\n Debuggable: {self.debuggable}\n Uses Cleartext Traffic: {self.uses_cleartext_traffic}\n Permissions: {self.permissions}"
+                f"APK analysis complete for {self.app_name} ({self.app_package}) - services: {self.services}, receivers: {self.receivers}, providers: {self.providers}, activities: {self.exported_activities}"
             )
             self.acv_workdir = f"{self.inst_apk_dir}/{self.app_package}"
             return True
@@ -212,9 +159,7 @@ class EnviromentHandler:
             return False
         except Exception as e:
             self.logger.error(f"Failed to instrument APK with ACVTool: {str(e)}")
-            raise Exception(
-                "APK instrumentation failed. Please check the APK path and ACVTool setup."
-            )
+            sys.exit(0)
         # 2 Install the instrumented APK in the Android emulator or device. [install ]
         # 3 Activate the app for coverage measurement [activate <package_name>] (alternatively, [start <package_name>])
         # 4 Test the application (launch it!)
@@ -233,35 +178,31 @@ class EnviromentHandler:
 
     def terminate_app(self) -> bool:
         """Stop the app on the emulator."""
-        for i in range(3):
+        for i in range(1):
             try:
                 self.logger.info(f"Attempt {i} stopping app: {self.app_package}")
                 # Terminate the app if it's running
                 self.appium_manager.driver.terminate_app(self.app_package)
-                time.sleep(2)  # Let the app close properly
+                time.sleep(1)  # Let the app close properly
                 self.logger.info("App stopped successfully")
                 return True
             except Exception as e:
                 self.logger.error(f"Failed to stop app: {str(e)}")
-        raise Exception(
-            "Failed to stop app after multiple attempts. Please check the app setup."
-        )
+        sys.exit(0)
 
     def start_app(self) -> bool:
         """Start the app on the emulator."""
-        for i in range(3):
+        for i in range(2):
             try:
                 self.logger.info(f"Attempt {i} starting app: {self.app_package}")
                 # Start the app's main activity
                 self.appium_manager.driver.activate_app(self.app_package)
-                time.sleep(2)  # Let the app stabilize
+                time.sleep(1)  # Let the app stabilize
                 self.logger.info("App started successfully")
                 return True
             except Exception as e:
                 self.logger.error(f"Failed to start app: {str(e)}")
-        raise Exception(
-            "Failed to start app after multiple attempts. Please check the app setup."
-        )
+        sys.exit(0)
 
     def restart_app(self) -> bool:
         try:
@@ -277,7 +218,7 @@ class EnviromentHandler:
             return False
 
     def start_emulator(self) -> bool:
-        for i in range(3):
+        for i in range(1):
             try:
                 if self.check_emulator_status():
                     self.logger.warning(
@@ -289,31 +230,20 @@ class EnviromentHandler:
                 if self.emulator_controller.start_emulator():
                     self.device_name = self.emulator_controller.get_device_name()
                     self.logger.info(f"Emulator started: {self.device_name}")
-
-                    # Initialize LogcatExtractor only after we have a valid device name
-                    self.logcat_extractor = LogcatExtractor(
-                        adb_path=self.adb_path,
-                        device_udid=self.device_name,
-                        app_name=self.app_name,
-                        logdir=self.master_log_dir,
-                    )
-
                     self.emulator_controller.install_appium_apks()  # have auto retry
                     return True
             except Exception as e:
                 self.logger.error(f"Failed to start emulator: {str(e)}")
-            time.sleep(10)
-        raise Exception(
-            "Failed to start emulator after multiple attempts. Please check the emulator setup."
-        )
+            time.sleep(2)
+        sys.exit(0)
 
     def start_appium(self) -> bool:
         if not self.analyze_apk():
             self.logger.error("APK analysis failed, cannot start Appium")
-            raise Exception("APK analysis failed, cannot start Appium")
+            sys.exit(0)
         if not self._intr_apk_w_acvtool():
             self.logger.error("APK instrumentation failed, cannot start test")
-            raise Exception("APK instrumentation failed, cannot start test")
+            sys.exit(0)
 
         self.appium_manager = AppiumManager(
             appium_port=self.appium_port,
@@ -323,17 +253,9 @@ class EnviromentHandler:
             app_name=self.app_name,
         )
 
-        for i in range(3):
+        for i in range(1):
             if self.appium_manager.start_appium_server():
-                if self.appium_manager.connect(
-                    self.device_name, self.string_activities, self.app_package
-                ):
-                    self.action_extractor = ActionExtractor(
-                        self.appium_manager.driver,
-                        log_dir=self.master_log_dir,
-                        emulator_name=self.emulator_name,
-                        app_name=self.app_name,
-                    )
+                if self.appium_manager.connect(self.device_name, self.app_package):
                     self.logger.info("Appium server started and connected successfully")
                     # Activate the app for coverage measurement
                     activate_args = self.acv_parser.parse_args(
@@ -348,9 +270,7 @@ class EnviromentHandler:
                     self.logger.error("Failed to connect to Appium server")
             else:
                 self.logger.error("Failed to start Appium server")
-        raise Exception(
-            "Failed to start Appium server after multiple attempts. Please check the Appium setup."
-        )
+        sys.exit(0)
 
     def check_emulator_status(self) -> bool:
         return self.emulator_controller.check_emulator_status(self.device_name)
@@ -358,129 +278,6 @@ class EnviromentHandler:
     def cleanup_emulator(self):
         self.emulator_controller.cleanup_emulator(self.device_name)
         self.appium_manager.cleanup_appium()
-        self.action_extractor = None  # Reset action extractor
-
-    def perform_action(self, action: Dict[str, Any]):
-        # Perform the specified action on the app's GUI.
-        # This method handles touch, gesture, text input, and system actions.
-        # Action via Appium and ADB commands.
-
-        try:
-            if action["type"] == "touch":
-                widget_index = action["widget_index"]
-                gui_hierarchy = self.appium_manager.driver.page_source
-                root = ET.fromstring(gui_hierarchy.encode("utf-8"))
-                for element in root.findall(".//*[@clickable='true']"):
-                    widget_key = (element.get("class"), element.get("text", ""))
-                    if self.gui_embedder.widget_dict.get(widget_key) == widget_index:
-                        xpath = self.action_extractor._generate_xpath(element)
-                        self.appium_manager.driver.find_element(
-                            by="xpath", value=xpath
-                        ).click()
-                        break
-            elif action["type"] == "gesture":
-                widget_index = action["widget_index"]
-                gesture_type = action["parameters"]["gesture_type"]
-                direction = action["parameters"]["direction"]
-                if gesture_type == "swipe":
-                    gui_hierarchy = self.appium_manager.driver.page_source
-                    root = ET.fromstring(gui_hierarchy.encode("utf-8"))
-                    for element in root.findall(".//*[@scrollable='true']"):
-                        widget_key = (element.get("class"), element.get("text", ""))
-                        if (
-                            self.gui_embedder.widget_dict.get(widget_key)
-                            == widget_index
-                        ):
-                            bounds = element.get("bounds", "[0,0][0,0]")
-                            x, y = self.action_extractor._parse_bounds(bounds)
-                            end_x = (
-                                x + 500
-                                if direction == "right"
-                                else x - 500
-                                if direction == "left"
-                                else x
-                            )
-                            end_y = (
-                                y + 500
-                                if direction == "down"
-                                else y - 500
-                                if direction == "up"
-                                else y
-                            )
-                            self.appium_manager.driver.swipe(
-                                start_x=x,
-                                start_y=y,
-                                end_x=end_x,
-                                end_y=end_y,
-                                duration=100,
-                            )
-                            break
-            elif action["type"] == "text_input":
-                widget_index = action["widget_index"]
-                text = action["parameters"]["text"]
-                gui_hierarchy = self.appium_manager.driver.page_source
-                root = ET.fromstring(gui_hierarchy.encode("utf-8"))
-                for element in root.findall(".//*[@class='android.widget.EditText']"):
-                    widget_key = (element.get("class"), element.get("text", ""))
-                    if self.gui_embedder.widget_dict.get(widget_key) == widget_index:
-                        xpath = self.action_extractor._generate_xpath(element)
-                        self.appium_manager.driver.find_element(
-                            by="xpath", value=xpath
-                        ).send_keys(text)
-                        break
-            elif action["type"] == "system":
-                system_action = action["action"]
-                if system_action == "toggle_network":
-                    subprocess.run(
-                        [
-                            "adb",
-                            "shell",
-                            "svc",
-                            "wifi",
-                            "enable"
-                            if self.gui_embedder.get_network_status() == 0
-                            else "disable",
-                        ]
-                    )
-                elif system_action == "rotate_screen":
-                    subprocess.run(
-                        [
-                            "adb",
-                            "shell",
-                            "settings",
-                            "put",
-                            "system",
-                            "user_rotation",
-                            "1"
-                            if self.gui_embedder.get_device_orientation() == 0
-                            else "0",
-                        ]
-                    )
-            self.logger.debug(f"Performed action: {action['type']}")
-        except Exception as e:
-            self.logger.error(f"Failed to perform action {action}: {str(e)}")
-
-    def save_to_txt(self, content: str, filename: str, directory: str = ""):
-        """
-        Save content to a text file in the master log directory.
-        """
-        save_dir = os.path.join(self.master_log_dir, directory)
-        os.makedirs(save_dir, exist_ok=True)
-        file_path = os.path.join(save_dir, filename)
-        try:
-            with open(file_path, "w", encoding="utf-8") as file:
-                file.write(content)
-            self.logger.info(f"Content saved to {file_path}")
-        except UnicodeEncodeError as e:
-            self.logger.error(
-                f"Unicode encoding error when saving to {file_path}: {str(e)}"
-            )
-            # Try to save with error handling for problematic characters
-            with open(file_path, "w", encoding="utf-8", errors="replace") as file:
-                file.write(content)
-            self.logger.warning(
-                f"Content saved to {file_path} with character replacement"
-            )
 
     def save_coverage_report(self):
         try:
@@ -516,14 +313,16 @@ class EnviromentHandler:
                 ]
             )
             run_actions(self.acv_parser, args=report_args)
-            if os.path.exists(self.acv_workdir+"/report"):
+            time.sleep(3)  # Wait for report generation
+            if os.path.exists(self.acv_workdir + "/report"):
                 # rename report folder to avoid overwriting
                 new_report_dir = f"{self.acv_workdir}/report_{self.ver}"
-                os.rename(self.acv_workdir+"/report", new_report_dir)
+                os.rename(self.acv_workdir + "/report", new_report_dir)
                 self.logger.info(f"Code coverage report generated in {new_report_dir}")
                 return
         except Exception as e:
             self.logger.error(f"Failed to generate code coverage report: {str(e)}")
+            
 
     def get_current_codecov_2_logcat(self):
         # run dump logcat after this
@@ -531,8 +330,6 @@ class EnviromentHandler:
             calculate_args = self.acv_parser.parse_args(
                 [
                     "calculate",
-                    "-d",
-                    self.device_name,
                     self.app_package,
                 ]
             )
@@ -540,215 +337,370 @@ class EnviromentHandler:
         except Exception as e:
             self.logger.error(f"Failed to parse ACVTool arguments: {str(e)}")
             return None
+
     def start_emu_and_appium(self):
         ## Start the emulator and Appium server
         if self.start_emulator():
             self.logger.info(f"Emulator {self.emulator_name} started successfully")
         else:
-            sys.exit("Failed to start emulator. Please check the emulator setup.")
+            sys.exit(0)
         time.sleep(1)  # Wait for emulator to stabilize
         if self.start_appium():
             self.logger.info("Appium server started successfully")
         else:
-            sys.exit("Failed to start Appium server. Please check the Appium setup.")
-            
-    def run_testing(self, max_steps: int = 3, episodes: int = 3):
-        """
-        MAIN TESTING LOOP
-        Run the RL-based GUI testing loop
-        """
-        ## ATTEMPT TO LOAD PREVIOUS MODEL AND REPLAY BUFFER
-        if os.path.exists(self.model_path):
-            self.dqn_agent.load_model(self.model_path)
-        if os.path.exists(self.replay_buffer_path):
-            self.dqn_agent.load_replay_buffer(self.replay_buffer_path)
+            sys.exit(0)
+        return True
 
-        self.start_emu_and_appium()
-        ## Begin the testing loop
+    # def perform_action(
+    #     self, action: dict, action_taken_vector: list, ref_act: dict = None
+    # ):
+    #     """
+    #     Perform the specified action on the app's GUI.
+    #     This method is adapted to work with the possible_actions format from GUIEmbedder.
+
+    #     Args:
+    #         action: Dictionary containing:
+    #             - id_hash: Hash identifier of the element
+    #             - resource_id: Resource ID of the element
+    #             - type: class of the element (e.g., Button, EditText)
+    #             - position: [left, top, right, bottom, center_x, center_y] coordinates
+    #             - position_norm: [left, top, right, bottom, center_x, center_y] normalized coordinates
+    #             - actions: List of possible actions (matches GUIEmbedder.action_types)
+    #             - status: List of element status flags [enabled, checked, password]
+    #             - input_type: List of input type flags [none, text, number]
+    #     Returns:
+    #         str: The type of action that was performed, or None if action failed
+    #     """
+    #     try:
+    #         # Get position and screen metadata
+    #         position = action.get(
+    #             "position", [0] * 6
+    #         )  # [top, left, bottom, right, center_x, center_y] in px
+    #         position_norm = action.get(
+    #             "position_norm", [0] * 6
+    #         )  # [norm_top, norm_left, ..., norm_cx, norm_cy]
+    #         screen_size = action.get(
+    #             "screen_size", [720, 1280]
+    #         )  # Original screen size from UI dump
+
+    #         # Action index (what kind of interaction)
+    #         status = action.get("status", [False, False, False])
+    #         resource_id = action.get("resource_id", None)
+    #         class_name = action.get("type", None)
+    #         is_enabled = status[0]
+    #         idx = action_taken_vector.index(1) if 1 in action_taken_vector else 0
+
+    #         # Get actual runtime screen size
+    #         actual_screen_size = self.appium_manager.driver.get_window_size()
+    #         actual_width = actual_screen_size.get("width", 720)
+    #         actual_height = actual_screen_size.get("height", 1280)
+
+    #         # Default to original (from UI dump) position
+    #         center_x = int(position[4])
+    #         center_y = int(position[5])
+
+    #         # If screen sizes mismatch, recalculate using normalized values
+    #         if screen_size != [actual_width, actual_height]:
+    #             self.logger.warning(
+    #                 f"Screen size mismatch: expected {screen_size}, got {actual_screen_size}"
+    #             )
+
+    #             if 0 < position_norm[4] <= 1 and 0 < position_norm[5] <= 1:
+    #                 center_x = int(position_norm[4] * actual_width)
+    #                 center_y = int(position_norm[5] * actual_height)
+    #                 self.logger.warning(
+    #                     f"Recomputed center position from norm -> ({center_x}, {center_y})"
+    #                 )
+    #             else:
+    #                 self.logger.warning(
+    #                     "Normalized position missing or invalid, using fallback from UI dump."
+    #                 )
+
+    #         if ref_act is not None:
+    #             act = list(ref_act.keys())[idx]
+    #             self.logger.warning(
+    #                 f"Performing action {str(act).upper()} [{str(action_taken_vector)}] to target {str(class_name)}-{str(resource_id)} at coordinates: ({center_x}, {center_y}) on screen {actual_width}x{actual_height}"
+    #             )
+    #         else:
+    #             self.logger.warning(
+    #                 f"Performing action {idx} to target {str(class_name)}-{str(resource_id)}at coordinates: ({center_x}, {center_y}) on screen {actual_width}x{actual_height}"
+    #             )
+
+    #         if is_enabled:
+    #             if idx == 0:  # click
+    #                 self.appium_manager.driver.tap([(center_x, center_y)], duration=500)
+    #                 action_type = "click"
+    #                 self.logger.debug(f"Clicked at ({center_x}, {center_y})")
+    #                 return True
+    #             elif idx == 1:  # long_click
+    #                 self.appium_manager.driver.tap(
+    #                     [(center_x, center_y)], duration=1500
+    #                 )
+    #                 action_type = "long_click"
+    #                 self.logger.debug(f"Long clicked at ({center_x}, {center_y})")
+    #                 return True
+    #             elif idx == 2:  # edit_number
+    #                 self.appium_manager.driver.tap([(center_x, center_y)], duration=100)
+    #                 time.sleep(0.5)
+    #                 text = [
+    #                     "99999999999999999999",
+    #                     "87.785685675675",
+    #                     "aaaaaaaaaaaaa",
+    #                     "#########",
+    #                     "-66666666666666666666666666",
+    #                     "-66666666666.666666666666666",
+    #                 ]
+    #                 try:
+    #                     focused_element = (
+    #                         self.appium_manager.driver.switch_to.active_element
+    #                     )
+    #                     if focused_element is None:
+    #                         self.logger.warning("No focused element found after tap.")
+    #                         return False
+    #                     for input_text in text:
+    #                         if not focused_element.is_displayed():
+    #                             return True
+    #                         focused_element.clear()
+    #                         focused_element.send_keys(input_text)
+    #                         focused_element.send_keys("\n")  # Simulate Enter key
+    #                         action_type = "edit_number"
+    #                         self.logger.debug(
+    #                             f"Input number '{text}' at ({center_x}, {center_y})"
+    #                         )
+    #                     return True
+    #                 except Exception:
+    #                     traceback.print_exc()
+    #                     return False
+    #             elif idx == 3:  # edit_text
+    #                 self.appium_manager.driver.tap([(center_x, center_y)], duration=100)
+    #                 time.sleep(0.5)
+    #                 text = [
+    #                     "test",
+    #                     "user@example.com",
+    #                     "121239909141241",
+    #                     "12312412.124124",
+    #                     "127.0.0.1",
+    #                     "@!$!!%!@%!%@!%",
+    #                 ]
+    #                 try:
+    #                     focused_element = (
+    #                         self.appium_manager.driver.switch_to.active_element
+    #                     )
+    #                     if focused_element is None:
+    #                         self.logger.warning("No focused element found after tap.")
+    #                         return False
+    #                     for input_text in text:
+    #                         if not focused_element.is_displayed():
+    #                             return True
+    #                         focused_element.clear()
+    #                         focused_element.send_keys(input_text)
+    #                         focused_element.send_keys("\n")  # Simulate Enter key
+    #                         action_type = "edit_text"
+    #                         self.logger.debug(
+    #                             f"Input text '{text}' at ({center_x}, {center_y})"
+    #                         )
+    #                     return True
+    #                 except Exception:
+    #                     traceback.print_exc()
+    #                     return False
+    #             elif idx in [4, 5, 6, 7]:  # scroll actions
+    #                 swipe_distance = 500
+    #                 dx, dy = 0, 0
+    #                 if idx == 4:  # scroll_up
+    #                     dx, dy = 0, -swipe_distance
+    #                     action_type = "scroll_up"
+    #                 elif idx == 5:  # scroll_down
+    #                     dx, dy = 0, swipe_distance
+    #                     action_type = "scroll_down"
+    #                 elif idx == 6:  # scroll_left
+    #                     dx, dy = -swipe_distance, 0
+    #                     action_type = "scroll_left"
+    #                 elif idx == 7:  # scroll_right
+    #                     dx, dy = swipe_distance, 0
+    #                     action_type = "scroll_right"
+
+    #                 end_x = max(0, min(center_x + dx, screen_size[0]))
+    #                 end_y = max(0, min(center_y + dy, screen_size[1]))
+    #                 self.appium_manager.driver.swipe(
+    #                     start_x=center_x,
+    #                     start_y=center_y,
+    #                     end_x=end_x,
+    #                     end_y=end_y,
+    #                     duration=500,
+    #                 )
+    #                 self.logger.debug(
+    #                     f"{action_type} from ({center_x}, {center_y}) to ({end_x}, {end_y})"
+    #                 )
+    #                 return True
+    #             elif idx in [8, 9]:  # rotation actions
+    #                 if idx == 8:  # rotate_landscape
+    #                     self.appium_manager.driver.orientation = "LANDSCAPE"
+    #                     action_type = "rotate_landscape"
+    #                 else:  # rotate_portrait
+    #                     self.appium_manager.driver.orientation = "PORTRAIT"
+    #                     action_type = "rotate_portrait"
+    #                 self.logger.debug(f"Rotated screen to {action_type}")
+    #                 return True
+    #             elif idx in [10, 11]:  # volume actions
+    #                 if idx == 10:  # volume_up
+    #                     self.appium_manager.driver.press_keycode(
+    #                         24
+    #                     )  # KEYCODE_VOLUME_UP
+    #                     action_type = "volume_up"
+    #                 else:  # volume_down
+    #                     self.appium_manager.driver.press_keycode(
+    #                         25
+    #                     )  # KEYCODE_VOLUME_DOWN
+    #                     action_type = "volume_down"
+    #                 self.logger.debug(f"Pressed {action_type}")
+    #                 return True
+    #             elif idx == 12:  # back
+    #                 self.appium_manager.driver.press_keycode(4)  # KEYCODE_BACK
+    #                 action_type = "back"
+    #                 self.logger.debug("Pressed back button")
+    #                 return True
+    #             elif idx == 13:  # context_click
+    #                 action_type = "context_click"
+    #                 self.appium_manager.driver.tap(
+    #                     [(center_x, center_y)], duration=1500
+    #                 )
+    #                 self.logger.debug(f"Context clicked at ({center_x}, {center_y})")
+    #                 return True
+    #         return action_type
+
+    #     except Exception as e:
+    #         self.logger.error(f"Failed to perform action {action}: {str(e)}")
+    #         traceback.print_exc()
+    #         return None
+    
+
+
+    def perform_action(self, action: dict, action_taken_vector: list, ref_act: dict = None):
+        """
+        Perform an action on the UI using W3C Actions (Appium v4+).
+        Logs every step for debugging and RL traceability.
+        """
         try:
-            for episode in range(episodes):
-                self.logger.info(f"Starting episode #{episode}")
-                self.logcat_extractor.clear_logcat() # Clear logcat before each episode
-                for step in range(max_steps):
+            idx = action_taken_vector.index(1) if 1 in action_taken_vector else 0
+            enabled = action.get("status", [False])[0]
+            if not enabled:
+                self.logger.info(f"[SKIP] Action {idx} skipped: Element not enabled.")
+                return None
 
-                    if not self.check_emulator_status():
-                        self.logger.error("Emulator offline, attempting to restart")
-                        self.cleanup_emulator()
-                        self.start_emu_and_appium()
+            res_id = action.get("resource_id")
+            pos_norm = action.get("position_norm", [0]*6)
+            pos = action.get("position", [0]*6)
+            screen = self.appium_manager.driver.get_window_size()
+            w, h = screen["width"], screen["height"]
+            cx = int(pos_norm[4] * w) if 0 < pos_norm[4] <= 1 else int(pos[4])
+            cy = int(pos_norm[5] * h) if 0 < pos_norm[5] <= 1 else int(pos[5])
 
-                    time.sleep(0.5)  # Wait for GUI stability
-                    gui_hierarchy = self.appium_manager.driver.page_source
-                    current_activity = self.appium_manager.driver.current_activity
-                    
+            # Try finding element by ID
+            el = None
+            if res_id:
+                try:
+                    el = self.appium_manager.driver.find_element("id", res_id)
+                except NoSuchElementException:
+                    self.logger.warning(f"[WARN] Element with resource ID '{res_id}' not found.")
+            
+            # Fallback: Try by class name if not found
+            if not el and "type" in action:
+                try:
+                    el = self.appium_manager.driver.find_element("class name", action["type"])
+                    self.logger.info(f"[INFO] Fallback element found by type: {action['type']}")
+                except NoSuchElementException:
+                    self.logger.warning(f"[WARN] Element fallback by class name '{action['type']}' failed.")
 
-                    state = self.gui_embedder.embed(gui_hierarchy, current_activity)
-                    # Visualize the extracted state for debugging
-                    state_visualization = self.gui_embedder.visualize_state(state, show_details=True)
-                    self.logger.info(f"Extracted State:\n{state_visualization}")
-                    
-                    self.save_to_txt(
-                        content=gui_hierarchy,
-                        filename=f"gui_hierarchy_E{episode}s{step}_{self.emulator_name}_{self.app_name}_{self.ver}.txt",
-                        directory="gui_hierarchies",
-                    )
-                    # Also save the state visualization
-                    self.save_to_txt(
-                        content=state_visualization,
-                        filename=f"state_visualization_E{episode}s{step}_{self.emulator_name}_{self.app_name}_{self.ver}.txt",
-                        directory="gui_hierarchies",
-                    )
-                    
-                    # self.logger.debug(f"widget_dict before extract_actions: {self.gui_embedder.widget_dict}")
-                    actions, action_vectors = self.action_extractor.extract_actions(
-                        gui_hierarchy, self.gui_embedder.widget_dict
-                    )
-                    
-                    # Log the extracted actions in a more readable format
-                    action_summary = []
-                    action_summary.append(f"Extracted {len(actions)} possible actions:")
-                    for i, action in enumerate(actions):  # Show first 10 actions
-                        action_type = action.get('type', 'unknown')
-                        if action_type == 'touch':
-                            widget_index = action.get('widget_index', -1)
-                            # Try to find the widget description
-                            widget_desc = "unknown"
-                            for widget_key, idx in self.gui_embedder.widget_dict.items():
-                                if idx == widget_index:
-                                    widget_type, widget_text = widget_key
-                                    widget_desc = f"{widget_type.split('.')[-1]}: '{widget_text[:20]}'"
-                                    break
-                            action_summary.append(f"  {i+1}. Touch {widget_desc}")
-                        elif action_type == 'gesture':
-                            gesture_type = action.get('parameters', {}).get('gesture_type', 'unknown')
-                            direction = action.get('parameters', {}).get('direction', 'unknown')
-                            action_summary.append(f"  {i+1}. Gesture: {gesture_type} {direction}")
-                        elif action_type == 'text_input':
-                            text = action.get('parameters', {}).get('text', '')
-                            action_summary.append(f"  {i+1}. Text Input: '{text}'")
-                        elif action_type == 'system':
-                            sys_action = action.get('action', 'unknown')
-                            action_summary.append(f"  {i+1}. System: {sys_action}")
-                        else:
-                            action_summary.append(f"  {i+1}. {action_type}: {str(action)[:50]}")
-                    
-                    
-                    action_summary_text = "\n".join(action_summary)
-                    self.logger.info(f"Action Summary:\n{action_summary_text}")
+            # W3C tap implementation
+            def do_w3c_tap(target_el=None):
+                touch = PointerInput(Interaction.POINTER_TOUCH, "finger")
+                actions = ActionChains(self.appium_manager.driver)
+                actions.w3c_actions = ActionChains(self.appium_manager.driver).w3c_actions
+                actions.w3c_actions.add_pointer_input(touch)
+                origin = target_el if target_el else PointerInput.Origin.viewport
+                x, y = (target_el.rect["x"] + target_el.rect["width"] // 2,
+                        target_el.rect["y"] + target_el.rect["height"] // 2) if target_el else (cx, cy)
+                pa = actions.w3c_actions.pointer_action
+                pa.create_pointer_move(0, origin, x, y)
+                pa.create_pointer_down(0)
+                pa.create_pointer_up(0)
+                actions.perform()
 
-                    self.save_to_txt(
-                        content=f"{action_summary_text}\n\nRaw Data:\n[{str(actions)}, {str(action_vectors)}]",
-                        filename=f"actions_E{episode}s{step}_{self.emulator_name}_{self.app_name}_{self.ver}.txt",
-                        directory="gui_hierarchies",
-                    )
+            action_type = None
+            log_prefix = f"[ACTION idx={idx} id={action.get('id_hash')}]"
+            
+            if idx == 0:  # Click
+                try:
+                    args = {"elementId": el.id} if el else {"x": cx, "y": cy}
+                    self.appium_manager.driver.execute_script("mobile: clickGesture", args)
+                except Exception:
+                    self.logger.warning(f"{log_prefix} clickGesture failed, fallback to W3C tap.")
+                    do_w3c_tap(el)
+                action_type = "click"
 
-                    if not actions:
-                        self.logger.info("No actions available, resetting app")
-                        self.restart_app()
-                        reward = -10.0
-                        self.dqn_agent.store(state, -1, reward, state, True, None)
-                        continue
-                    action_idx = self.dqn_agent.act(state, actions, action_vectors)
-                    action = actions[action_idx]
+            elif idx == 1:  # Long click
+                args = {"duration": 1000}
+                args["elementId"] = el.id if el else None
+                if not el:
+                    args.update({"x": cx, "y": cy})
+                self.appium_manager.driver.execute_script("mobile: longClickGesture", args)
+                action_type = "long_click"
 
-                    # Clear logs before action and check for crashes after
-                    if self.logcat_extractor:
-                        self.logcat_extractor.clear_logcat()
-                    self.perform_action(action)
-                    time.sleep(0.5)
+            elif idx == 13:  # Double click
+                args = {"elementId": el.id} if el else {"x": cx, "y": cy}
+                self.appium_manager.driver.execute_script("mobile: doubleClickGesture", args)
+                action_type = "double_click"
 
-                    # Check for crashes only if logcat_extractor is initialized
-                    crash_logs = []
-                    if self.logcat_extractor:
-                        logs = self.logcat_extractor.dump_logcat() # dump logcat 
-                        crash_logs = self.logcat_extractor.extract_crash_logs(logs)
-                    has_crash = len(crash_logs) > 0
+            elif idx in (2, 3):  # Text input
+                if el:
+                    el.click()
+                else:
+                    do_w3c_tap()
+                # Wait for focused element
+                try:
+                    WebDriverWait(self.appium_manager.driver, 3).until(lambda d: d.switch_to.active_element)
+                    focused = self.appium_manager.driver.switch_to.active_element
+                    if not focused:
+                        self.logger.warning(f"{log_prefix} no focused input.")
+                        return False
+                    texts = (["99999", "..."] if idx == 2 else ["test", "user@example.com"])
+                    for txt in texts:
+                        if not focused.is_displayed():
+                            break
+                        focused.clear()
+                        focused.send_keys(txt + "\n")
+                    action_type = "edit_number" if idx == 2 else "edit_text"
+                except Exception:
+                    self.logger.error(f"{log_prefix} failed to focus input.")
+                    return False
 
-                        
-                    app_left = not self.check_app_status()
+            elif idx in (4, 5, 6, 7):  # Scroll gestures
+                dirs = {4: "up", 5: "down", 6: "left", 7: "right"}
+                direction = dirs[idx]
+                args = {"direction": direction, "percent": 0.75}
+                if el:
+                    args["elementId"] = el.id
+                self.appium_manager.driver.execute_script("mobile: swipeGesture", args)
+                action_type = f"scroll_{direction}"
 
-                    if app_left and not has_crash:
-                        self.restart_app()
-                        next_state = self.gui_embedder.embed(
-                            self.appium_manager.driver.page_source
-                        )
-                        next_gui_hierarchy = self.appium_manager.driver.page_source
-                    elif not has_crash:
-                        next_gui_hierarchy = self.appium_manager.driver.page_source
-                        next_state = self.gui_embedder.embed(next_gui_hierarchy)
-                    else:
-                        self.logger.warning("Crash occurred, restarting app")
-                        self.logger.warning(f"Action do crash: {action['type']}")
-                        self.logger.warning(
-                            f"Location: {action['widget_index']}, {action['parameters']}"
-                        )
-                        self.logger.warning(f"Crash logs: {"\n###### CRASH/ERROR DETECTED #######\n".join(crash_logs)}")
+            elif idx in (8, 9):  # Rotate
+                orientation = "LANDSCAPE" if idx == 8 else "PORTRAIT"
+                self.appium_manager.driver.orientation = orientation
+                action_type = f"rotate_{orientation.lower()}"
 
-                        self.restart_app()
-                        next_state = None
-                        next_gui_hierarchy = None
+            elif idx in (10, 11):  # Volume
+                key = 24 if idx == 10 else 25
+                self.appium_manager.driver.press_keycode(key)
+                action_type = "volume_up" if idx == 10 else "volume_down"
 
-                    # Extract next action vectors
-                    next_action_vectors = (
-                        self.action_extractor.extract_actions(
-                            next_gui_hierarchy, self.gui_embedder.widget_dict
-                        )[1]
-                        if next_gui_hierarchy
-                        else []
-                    )
-                    reward = self.reward_analyzer.calculate_reward(
-                        state,
-                        next_state,
-                        action,
-                        has_crash,
-                        crash_logs,
-                        app_left,
-                        next_gui_hierarchy,
-                    )
-                    if next_state is not None and len(next_action_vectors) > action_idx:
-                        intrinsic_loss = self.dqn_agent.icm(
-                            state, next_action_vectors[action_idx], next_state
-                        )
-                        intrinsic = intrinsic_loss.item()
-                        reward += self.dqn_agent.beta * intrinsic
-                    done = step == max_steps - 1
+            elif idx == 12:  # Back
+                self.appium_manager.driver.press_keycode(4)
+                action_type = "back"
 
-                    # self.logger.debug(f"State: {state}, Action: {action}, Reward: {reward}, Next State: {next_state}, Done: {done}")
-                    # self.logger.debug(f"Action vectors: {action_vectors}")
-                    
-                    self.dqn_agent.store(
-                        state, action_idx, reward, next_state, done, next_action_vectors
-                    )
+            self.logger.info(f"{log_prefix} Executed action: {action_type} at ({cx}, {cy})")
+            return action_type
 
-                    self.dqn_agent.train()
-                    if (
-                        len(self.dqn_agent.memory) % 8 == 1
-                        and len(self.dqn_agent.memory) > 100
-                    ):
-                        mmodel = train_macro_generator(
-                            self.dqn_agent.memory,
-                            self.state_dim,
-                            self.action_vector_dim,
-                        )
-                        self.dqn_agent.macro_generator.load_state_dict(
-                            mmodel.state_dict()
-                        )
-
-                   
-                    self.logger.warning(
-                        f"Episode {episode}, Step {step}: Action {str(action['type'])}"
-                    )
-                    self.logger.warning(
-                        f"Reward: {reward}, Crash: {has_crash}, App left: {app_left}"
-                    )
-            self.get_current_codecov_2_logcat()
-            # Save graph and generate HTML visualization at the end of each episode
-            # self.dqn_agent.stgraph.save_graph(episode)
-        #         self.dqn_agent.save_model(self.model_path)
-        #         self.dqn_agent.save_replay_buffer(self.replay_buffer_path)
-        #         self.dqn_agent.hidden_state = None
-
-        #         # self.logger.warning(f"Code cov: {self.check_coverage()}")
-
-        finally:
-            self.cleanup_emulator()
-            self.logger.warning("Testing completed")
+        except Exception as e:
+            self.logger.error("[ERROR] perform_action failed", exc_info=True)
+            self.logger.error(traceback.print_exc())
+            return None

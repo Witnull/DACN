@@ -39,11 +39,11 @@ class EmulatorController:
             self.logger.info(f"Starting emulator: {self.emulator_name}...")
             cmd = (
                 f"{self.emulator_exe} -port {self.emulator_port} -avd {self.emulator_name}"
-                " -no-snapshot -wipe-data -no-boot-anim"
+                " -no-snapshot-save -wipe-data -no-boot-anim -accel auto"
             )
             self.process = subprocess.Popen(cmd, shell=True)
             self.logger.info(f"Started emulator: {self.emulator_name}")
-            time.sleep(30)
+            time.sleep(20)
             # disable animations
             for scale in [
                 "window_animation_scale",
@@ -53,7 +53,10 @@ class EmulatorController:
                 os.system(
                     f"{self.adb_path} -s emulator-{self.emulator_port} shell settings put global {scale} 0"
                 )
-
+            
+            os.system(f"{self.adb_path} -s emulator-{self.emulator_port} shell settings put system pointer_location 1")
+            os.system(f"{self.adb_path} -s emulator-{self.emulator_port} shell settings put system show_touches 1")
+            #adb shell settings put system show_touches 1
             return True
         except Exception as e:
             self.logger.error(f"Error starting emulator: {e}")
@@ -78,7 +81,7 @@ class EmulatorController:
                         return name
             except Exception as e:
                 self.logger.error(f"Error getting device name: {e}")
-            time.sleep(3)
+            time.sleep(2)
         sys.exit(
             "Failed to get device name after multiple attempts. Please check the emulator."
         )
@@ -108,7 +111,8 @@ class EmulatorController:
 
     def cleanup_emulator(self, device_name: str):
         try:
-            subprocess.run(f"{self.adb_path} -s {device_name} emu kill", shell=True)
+            cmd = [self.adb_path, "-s", device_name, "emu", "kill"]
+            subprocess.run(cmd, shell=True)
             self.logger.info("Emulator cleaned up")
         except Exception as e:
             self.logger.error(f"Cleanup error: {e}")
@@ -151,7 +155,7 @@ class AppiumManager:
                 ],
                 node_path=self.node_path,
             )
-            time.sleep(5)  # Wait for Appium to start
+            time.sleep(2)  # Wait for Appium to start
             self.logger.info(f"Started Appium service on port {self.appium_port}")
             return True
         except Exception as e:
@@ -159,7 +163,7 @@ class AppiumManager:
             return False
 
     def connect(
-        self, device_name: str, string_activities: str, app_package: str = None
+        self, device_name: str, app_package: str = None
     ) -> bool:
         self.device_name = device_name
         self.logger.info(
@@ -172,7 +176,7 @@ class AppiumManager:
             "appium:app": self.apk_path,
             "appium:automationName": "UiAutomator2",
             "appium:autoGrantPermissions": True,
-            "appium:appWaitActivity": string_activities,
+            "appium:appWaitActivity": "*",
             "appium:fullReset": False,
             "appium:noReset": False,
             "appium:unicodeKeyboard": True,
@@ -194,7 +198,7 @@ class AppiumManager:
                 return True
             except WebDriverException as e:
                 self.logger.error(f"Appium connection failed: {e}")
-                time.sleep(5)
+                time.sleep(2)
         return False
 
     def cleanup_appium(self):

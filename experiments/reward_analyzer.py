@@ -1,136 +1,183 @@
+import hashlib
+import traceback
 import torch
-from typing import Dict, Any
+import numpy as np
+from typing import Set, Tuple, Optional, Dict, Any
+from scipy.spatial.distance import cosine
 from experiments.logger import setup_logger
-from lxml import etree as ET
-import logging
 
 REWARDS = {
-    "crash": 20,
-    "new_state": 10,
+    "crash": 10,
+    "repeated_crash": 1,
+    "new_activity": 10,
+    "new_state": 5,
     "repeated_state": -5,
-    "text_input_penalty": -2,
-    "app_left": -10,
-    "invalid_state": -1,
+    "new_transition": 5,
+    "app_left": -5,
     "default_penalty": -1,
-    "debuggable_app_found": 5, # Penalty for finding a debuggable app
-    "cleartext_traffic_found": 10, # Penalty for finding cleartext traffic
-    "dangerous_permission_found": 10, # Penalty for finding dangerous permissions
 }
+
 class RewardAnalyzer:
-    def __init__(self, log_dir: str = "app/logs/", emulator_name: str = "Unknown", app_name: str = "Unknown", gui_embedder=None, debuggable: bool = False, uses_cleartext_traffic: bool = False, permissions: list = [], logger=None):
-        if logger is None:
-            self.logger = setup_logger(f"{log_dir}/reward_analyzer.log", emulator_name=emulator_name, app_name=app_name)
-        else:
-            self.logger = logger
-        self.seen_states = set()
-        self.seen_widgets = set()
+    def __init__(
+        self,
+        log_dir: str = "app/logs/",
+        emulator_name: str = "Unknown",
+        app_name: str = "Unknown",
+        similarity_threshold: float = 0.85,
+        familiar_threshold: float = 0.99,
+        transition_weight: float = 0.5,
+    ):
+        self.logger = setup_logger(
+            f"{log_dir}/reward_analyzer.log",
+            emulator_name=emulator_name,
+            app_name=app_name,
+        )
+        self.seen_activities = set()
+        self.seen_activities_widgets: Dict[str, Set[str]] = {}  # fixed
+        self.seen_states = {}
         self.seen_crashes = set()
-        self.last_action = None
-        self.last_widget = None
-        self.consecutive_text_inputs = 0
-        self.gui_embedder = gui_embedder
-        self.debuggable = debuggable
-        self.uses_cleartext_traffic = uses_cleartext_traffic
-        self.permissions = permissions
+        self.raw_crashes = []
+        self.seen_transitions: Dict[Tuple[str, str], Set[Tuple[str, str, str]]] = {}
+        self.similarity_threshold = similarity_threshold
+        self.familiar_threshold = familiar_threshold
+        self.max_time = 60 * 60 * 3
+        self.transition_weight = transition_weight
+        self.step_count = 0
+        self.instr_cov = 0.0
+        self.activity_cov = 0.0
 
-    def calculate_reward(self, state, next_state, action, crash_occurred, crash_logs, app_left, next_gui_hierarchy=None):
-        reward = 0
+    def calculate_reward(
+        self,
+        time_elapsed: float,
+        found_activities,
+        instr_cov: float,
+        activity_cov: float,
+        prev_activity_id_hash,
+        prev_elm_id_hash,
+        activity_id_hash,
+        state_vector: torch.Tensor,
+        has_crash: bool,
+        crash_logs,
+        app_left: bool,
+    ) -> float:
+        try:
+            reward = 0.0
 
-        # Handle app crashes or exits
-        if app_left:
-            reward = REWARDS["app_left"]
-        elif crash_occurred:
-            pass
-            # if crash_id not in self.seen_crashes:
-            #     reward = REWARDS["crash"]
-            #     self.seen_crashes.add(crash_id)
-            # else:
-            #     reward = REWARDS["repeated_state"]
-        elif next_state is not None:
-            state_str = ".".join(map(str, next_state.int().tolist()))
-            if state_str not in self.seen_states:
-                self.seen_states.add(state_str)
-                reward = REWARDS["new_state"]
+            if app_left and not has_crash:
+                self.logger.warning("App left detected, applying penalty")
+                return REWARDS["app_left"]
+
+            # Handle crash
+            if has_crash:
+                new_crash = False
+                for crash_log in crash_logs:
+                    csh = hashlib.md5(crash_log.strip().encode()).hexdigest()
+                    if csh not in self.seen_crashes:
+                        new_crash = True
+                        self.seen_crashes.add(csh)
+                        self.raw_crashes.append(crash_log)
+                reward += REWARDS["crash"] if new_crash else REWARDS["repeated_crash"]
+                self.logger.info(f"{'New' if new_crash else 'Repeated'} crash: reward += {reward}")
+
+            # Base reward: new activity
+            base_reward = 0.0
+            new_activity = found_activities.difference(self.seen_activities)
+            if new_activity:
+                base_reward += REWARDS["new_activity"]
+                self.logger.info(f"New activity {new_activity} found: reward += {REWARDS['new_activity']}")    
+            self.seen_activities |= found_activities
+            
+            # Similarity calculation
+            state_vector = state_vector.cpu().numpy()
+            key = activity_id_hash + "_" + prev_elm_id_hash
+            if key not in self.seen_states:
+                self.seen_states[key]=[]
+                self.seen_states[key].append((state_vector))
+                self.logger.info(f"New state added: {key}")
+                base_reward += REWARDS["new_state"]
             else:
-                reward = REWARDS["repeated_state"]
+                max_similarity = 0.0
+                for seen_vector in self.seen_states[key]:
+                    try:
+                        u = state_vector.flatten()
+                        v = seen_vector.flatten()
+                        norm_u = np.linalg.norm(u)
+                        norm_v = np.linalg.norm(v)
 
-            # Reward for new GUI elements discovered
-            if next_gui_hierarchy and self.gui_embedder:
-                root = ET.fromstring(next_gui_hierarchy.encode("utf-8"))
-                clickable_elements = (
-                    root.findall(".//*[@clickable=\'true\']") +
-                    root.findall(".//*[@scrollable=\'true\']") +
-                    root.findall(".//*[@class=\'android.widget.EditText\']")
-                )
-                for element in clickable_elements:
-                    widget_type = element.get("class", ".")
-                    if "EditText" in widget_type:
-                        widget_id = element.get("resource-id", ".")
-                        widget_key = (widget_type, widget_id)
-                    else:
-                        widget_text = element.get("text", ".")
-                        widget_key = (widget_type, widget_text)
-                    
-                    if widget_key not in self.seen_widgets:
-                        self.seen_widgets.add(widget_key)
-                        reward += 5  # Additional reward for new widget
+                        if norm_u == 0 or norm_v == 0:
+                            max_similarity = 1  # or define a default 1 # old state
+                            self.logger.warning(f"One of the vectors is zero, setting similarity to 1.0\n state_vector: {u}, seen_vector: {v}")
+                        else:
+                            max_similarity = 1 - cosine(u, v)
+                    except Exception as e:
+                        self.logger.warning(f"Similarity comparison failed: {e}")
+                        self.logger.error(traceback.print_exc())
+                        continue
 
-            # Penalize excessive repeated text input
-            if action["type"] == "text_input":
-                current_widget = action.get("widget_index")
-                if self.last_action == "text_input" and self.last_widget == current_widget:
-                    self.consecutive_text_inputs += 1
-                    reward += REWARDS["text_input_penalty"] * self.consecutive_text_inputs
+                if max_similarity < self.similarity_threshold:
+                    base_reward += REWARDS["new_state"]
+                    self.seen_states[key].append((state_vector))
+                elif max_similarity > self.familiar_threshold:
+                    base_reward += REWARDS["repeated_state"]
                 else:
-                    self.consecutive_text_inputs = 1
+                    base_reward += ((1 - max_similarity) * REWARDS["new_state"])
+
+                self.logger.info(f"State similarity: {max_similarity:.2f}, base_reward now {base_reward:.2f}")
+
+
+            # State widget exploration
+            state_reward = 0.0
+            if activity_id_hash not in self.seen_activities_widgets:
+                self.seen_activities_widgets[activity_id_hash] = set()
+
+            if prev_elm_id_hash not in self.seen_activities_widgets[activity_id_hash]:
+                state_reward += REWARDS["new_state"]
             else:
-                self.consecutive_text_inputs = 0
+                state_reward += REWARDS["repeated_state"]
 
-            self.last_action = action["type"]
-            self.last_widget = action.get("widget_index")
-        else:
-            reward = REWARDS["invalid_state"]  # default penalty for invalid or stuck state
+            self.seen_activities_widgets[activity_id_hash].add(prev_elm_id_hash)
 
-        # Incorporate APK analysis findings into reward
-        if self.debuggable:
-            reward += REWARDS["debuggable_app_found"]
-            self.logger.warning("Debuggable app found. Applying penalty.")
-        if self.uses_cleartext_traffic:
-            reward += REWARDS["cleartext_traffic_found"]
-            self.logger.warning("App uses cleartext traffic. Applying penalty.")
-        
-        # Define a list of dangerous permissions (example, can be expanded)
-        dangerous_permissions = [
-            "android.permission.READ_CONTACTS",
-            "android.permission.WRITE_CONTACTS",
-            "android.permission.GET_ACCOUNTS",
-            "android.permission.READ_CALENDAR",
-            "android.permission.WRITE_CALENDAR",
-            "android.permission.ACCESS_FINE_LOCATION",
-            "android.permission.ACCESS_COARSE_LOCATION",
-            "android.permission.RECORD_AUDIO",
-            "android.permission.READ_PHONE_STATE",
-            "android.permission.CALL_PHONE",
-            "android.permission.READ_CALL_LOG",
-            "android.permission.WRITE_CALL_LOG",
-            "android.permission.ADD_VOICEMAIL",
-            "android.permission.USE_SIP",
-            "android.permission.PROCESS_OUTGOING_CALLS",
-            "android.permission.BODY_SENSORS",
-            "android.permission.SEND_SMS",
-            "android.permission.RECEIVE_SMS",
-            "android.permission.READ_SMS",
-            "android.permission.RECEIVE_WAP_PUSH",
-            "android.permission.RECEIVE_MMS",
-            "android.permission.READ_EXTERNAL_STORAGE",
-            "android.permission.WRITE_EXTERNAL_STORAGE"
-        ]
+            # Transition reward
+            trans_reward = 0.0
+            trans_key = (prev_activity_id_hash, activity_id_hash)
+            trans_value = (prev_activity_id_hash, prev_elm_id_hash, activity_id_hash)
+            if trans_key not in self.seen_transitions:
+                self.seen_transitions[trans_key] = set()
 
-        for perm in self.permissions:
-            if perm in dangerous_permissions:
-                reward += REWARDS["dangerous_permission_found"]
-                self.logger.warning(f"Dangerous permission found: {perm}. Applying penalty.")
+            if trans_value not in self.seen_transitions[trans_key]:
+                trans_reward += REWARDS["new_transition"]
+                self.seen_transitions[trans_key].add(trans_value)
+            else:
+                trans_reward += REWARDS["repeated_state"]
 
-        self.logger.info(f"Reward calculated: {reward}")
-        return reward
+            # Time-scaled reward
+            time_reward =  1#time_elapsed/ self.max_time if time_elapsed < self.max_time else 0.5
 
+            # Coverage delta reward
+            cov_reward = 0.0
+            if self.instr_cov == 0.0:
+                self.instr_cov = instr_cov
+            else:
+                cov_reward = (instr_cov - self.instr_cov) * 100
+                self.instr_cov = instr_cov
+            
+            if self.activity_cov == 0.0:
+                self.activity_cov = activity_cov
+            else:
+                cov_reward += (activity_cov - self.activity_cov) * 100
+                self.activity_cov = activity_cov
+
+            # Total reward
+            reward += (base_reward + state_reward + trans_reward * self.transition_weight + cov_reward) * time_reward
+
+            self.logger.info(
+                f"Total reward: {reward:.2f} (base: {base_reward:.2f}, state: {state_reward:.2f}, "
+                f"trans: {trans_reward:.2f}, cov: {cov_reward:.2f}, time: {time_reward:.2f})"
+            )
+
+            return reward
+
+        except Exception as e:
+            self.logger.error(f"Error calculating reward: {e}")
+            self.logger.error(traceback.format_exc())
+            return 0.0
