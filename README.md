@@ -5,7 +5,7 @@
 An automated mobile application testing framework combining Deep Q-Learning with GINE for graph feature extraction and CNN for Image patching for efficient test action selection and execution. This model is inspired by the paper [Deep Reinforcement Learning for Automated Android GUI Testing](https://dl.acm.org/doi/10.1145/3597503.3623344)
 
 <p align="center">
-  <img src="asset/images/model_wf_gen.png" width="800" alt="Workflow Overview">
+  <img src="asset/images/model_wf_gen.png" width="500" alt="Workflow Overview">
 </p>
 
 ## 🛠️ Dependencies & Environment
@@ -127,29 +127,29 @@ Each app is given 2 hrs per test model.
 ### Process APKs
 
 <p align="center">
-  <img src="asset/images/process_apk.png" width="800" alt="Process APKs">
+  <img src="asset/images/process_apk.png" width="300" alt="Process APKs">
 </p>
 
 ### GUI Embedder
 
 <p align="center">
-  <img src="asset/images/guiem_wf.png" width="800" alt="GUI Embedding">
+  <img src="asset/images/guiem_wf.png" width="500" alt="GUI Embedding">
 </p>
 
 ### State Embedder
 
 <p align="center">
-  <img src="asset/images/stateem_wf.png" width="800" alt="State Embedding">
+  <img src="asset/images/stateem_wf.png" width="300" alt="State Embedding">
 </p>
 
 ### DQN Model
 
 <p align="center">
-  <img src="asset/images/dqna_wf.png" width="800" alt="DQN Model">
+  <img src="asset/images/dqna_wf.png" width="300" alt="DQN Model">
 </p>
 
 ### Environment
 
 <p align="center">
-  <img src="asset/images/env_wf.png" width="800" alt="Environment">
+  <img src="asset/images/env_wf.png" width="300" alt="Environment">
 </p>
