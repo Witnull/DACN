@@ -107,3 +107,16 @@ Each app is given 2 hrs per test model.
 - [UI/Application Exerciser Monkey](https://developer.android.com/studio/test/other-testing-tools/monkey)
 
 ---
+## Images
+### Full workflow
+![Full workflow](asset/images/model_full_wf.png)
+### Process APKs
+![Process API](asset/images/process_apk.png)
+### GUI Embedder
+![GUI Embedding](asset/images/guiem_wf.png)
+### State Embedder
+![State Embedding](asset/images/stateem_wf.png)
+### DQN Model
+![DQN Model](asset/images/dqna_wf.png)
+### Environment
+![Environment](asset/images/env_wf.png)
