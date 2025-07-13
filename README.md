@@ -1,6 +1,7 @@
 # DACN : Automatic black-box testing ultilizing reinforcement learning for Android application
 
-An automated mobile application testing framework combining Deep Q-Learning with GINE for graph feature extraction and Image patching for efficient test case generation and execution. This model is inspired by the paper [Deep Reinforcement Learning for Automated Android GUI Testing](https://dl.acm.org/doi/10.1145/3597503.3623344)
+## Overview
+An automated mobile application testing framework combining Deep Q-Learning with GINE for graph feature extraction and CNN for Image patching for efficient test action selection and execution. This model is inspired by the paper [Deep Reinforcement Learning for Automated Android GUI Testing](https://dl.acm.org/doi/10.1145/3597503.3623344)
 
 ![Workflow Overview](asset/images/model_wf_gen.png)
 
