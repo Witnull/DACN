@@ -1,0 +1,33 @@
+# View code flow https://pypi.org/project/code2flow/
+
+code2flow .\experiments\ main.py --language py --exclude-functions setup_logger --output code_base_v2.dot
+
+# View : 
+https://dreampuf.github.io/GraphvizOnline/
+https://edotor.net/
+
+# Monkey : https://developer.android.com/studio/test/other-testing-tools/monkey
+
+# Code cov:
+ACVTool[Q1 https://dl.acm.org/doi/10.1145/3395042] :https://github.com/pilgun/acvtool
+Jacoco : https://github.com/jacoco/jacoco?tab=readme-ov-file
+AndroLog: https://github.com/JordanSamhi/AndroLog
+
+
+# APPLIED:
+.
+├── [] MetaControl - Need implement - Target action selection ("navigate", "input", "backtrace")/
+│   └── [] Double DuelDQN - basic sub-action selection ("click", "long-click", "swipe","edit_text")
+├── [] Reward - What will be predicted in Q gamma=0.95?/
+│   └── meta_reward - [] not yet -shaping this /
+│       └── reward_d-2ddqn []Need to clipping/ smoothing
+├── [] The "done" attr formulate
+├── [] Revise of q_value - should be low td_errors
+├── [] Optimize the steps - More episode as it now rely on MetaControl
+├── [] The 50 train after 50 steps - collect k step and train N interations/
+│   └── [] Revis training replay - sliding window
+├── [] optimize epsilon - higher,more random (begin) - lower, rely on q_value (later)
+├── State - ok for now
+├── Action Space - ok for now
+└── Action - ok for now
+ 

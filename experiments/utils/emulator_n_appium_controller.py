@@ -43,7 +43,7 @@ class EmulatorController:
             )
             self.process = subprocess.Popen(cmd, shell=True)
             self.logger.info(f"Started emulator: {self.emulator_name}")
-            time.sleep(20)
+            time.sleep(45)
             # disable animations
             for scale in [
                 "window_animation_scale",
@@ -53,10 +53,14 @@ class EmulatorController:
                 os.system(
                     f"{self.adb_path} -s emulator-{self.emulator_port} shell settings put global {scale} 0"
                 )
-            
-            os.system(f"{self.adb_path} -s emulator-{self.emulator_port} shell settings put system pointer_location 1")
-            os.system(f"{self.adb_path} -s emulator-{self.emulator_port} shell settings put system show_touches 1")
-            #adb shell settings put system show_touches 1
+
+            # os.system(
+            #     f"{self.adb_path} -s emulator-{self.emulator_port} shell settings put system pointer_location 1"
+            # )
+            # os.system(
+            #     f"{self.adb_path} -s emulator-{self.emulator_port} shell settings put system show_touches 1"
+            # )
+            # adb shell settings put system show_touches 1
             return True
         except Exception as e:
             self.logger.error(f"Error starting emulator: {e}")
@@ -162,9 +166,7 @@ class AppiumManager:
             self.logger.error(f"Failed to start Appium service: {str(e)}")
             return False
 
-    def connect(
-        self, device_name: str, app_package: str = None
-    ) -> bool:
+    def connect(self, device_name: str, app_package: str = None) -> bool:
         self.device_name = device_name
         self.logger.info(
             f"Connecting to Appium via device {self.device_name} - {app_package}..."
@@ -181,10 +183,10 @@ class AppiumManager:
             "appium:noReset": False,
             "appium:unicodeKeyboard": True,
             "appium:resetKeyboard": True,
-            "appium:androidInstallTimeout": 30000,
+            "appium:androidInstallTimeout": 60000,
             "appium:isHeadless": False,
-            "appium:adbExecTimeout": 30000,
-            "appium:newCommandTimeout": 200,
+            "appium:adbExecTimeout": 60000,
+            "appium:newCommandTimeout": 60000,
         }
         if app_package:
             caps["appium:appPackage"] = app_package
@@ -210,3 +212,15 @@ class AppiumManager:
             self.appium_service.stop()
             self.appium_service = None
             self.logger.info("Appium service stopped")
+
+    def restart_appium(self):
+        """Restart the Appium server and driver."""
+        self.logger.info("Restarting Appium service and driver...")
+        self.cleanup_appium()
+        if not self.start_appium_server():
+            self.logger.error("Failed to restart Appium server")
+            sys.exit(0)
+        if not self.connect(self.device_name, self.app_package):
+            self.logger.error("Failed to restart Appium server")
+            sys.exit(0)
+        self.logger.info("Appium service and driver restarted successfully")

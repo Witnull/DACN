@@ -44,69 +44,6 @@ class AndroidScreenEncoder(nn.Module):
         return self.fc(x)
 
 
-class UIDataset(Dataset):
-    """
-    A PyTorch Geometric Dataset to store and save Data objects.
-    """
-
-    def __init__(self, root, transform=None, pre_transform=None):
-        """
-        Args:
-            root (str): Root directory where processed data will be saved.
-            transform (callable, optional): A function/transform for Data objects.
-            pre_transform (callable, optional): A function/transform applied before saving.
-        """
-        super().__init__(root, transform, pre_transform)
-        self.data_list = []  # List to store Data objects
-        os.makedirs(self.processed_dir, exist_ok=True)
-
-    @property
-    def processed_file_names(self):
-        """
-        Return the list of processed file names (updated dynamically after saving).
-        """
-        return [f"data_{i}.pt" for i in range(len(self.data_list))]
-
-    def add(self, data: Data):
-        """
-        Add a Data object to the dataset.
-
-        Args:
-            data (Data): A PyTorch Geometric Data object to add.
-        """
-        if self.pre_transform is not None:
-            data = self.pre_transform(data)
-        self.data_list.append(data)
-
-    def save(self):
-        """
-        Save all Data objects in the dataset to the processed directory.
-        """
-        for idx, data in enumerate(self.data_list):
-            torch.save(data, os.path.join(self.processed_dir, f"data_{idx}.pt"))
-
-    def len(self):
-        """
-        Return the number of graphs in the dataset.
-        """
-        return len(self.data_list)
-
-    def get(self, idx):
-        """
-        Get a Data object by index. Apply transform if specified.
-
-        Args:
-            idx (int): Index of the Data object.
-
-        Returns:
-            Data: The Data object at the given index.
-        """
-        data = self.data_list[idx]
-        if self.transform is not None:
-            data = self.transform(data)
-        return data
-
-
 class GUIEmbedder:
     def __init__(
         self,
@@ -141,7 +78,7 @@ class GUIEmbedder:
             "scroll_left": 6,
             "scroll_right": 7,
             "rotate_landscape": 8,
-            "rotate_potrait": 9,
+            "rotate_portrait": 9,
             "volume_up": 10,
             "volume_down": 11,
             "back": 12,
@@ -153,15 +90,24 @@ class GUIEmbedder:
             "1": "text",
             "2": "number",
         }
+
         self.eltext_embedding_dim = 32
         self.eldesc_embedding_dim = 16
         self.vis_dim = 64
         self.action_dim = len(self.action_types)
         self.input_types = len(self.input_type_keys)
-        self.action_space_dim = (1+ self.action_dim+ self.input_types+ 3+ 6 + self.eltext_embedding_dim + self.eldesc_embedding_dim + self.vis_dim)
+        self.action_space_dim = (
+            1
+            + self.action_dim
+            + self.input_types
+            + 3
+            + 6
+            + self.eltext_embedding_dim
+            + self.eldesc_embedding_dim
+            + self.vis_dim
+        )
 
         self.graph = nx.MultiDiGraph()
-        self.dataset = UIDataset(root=f"ui_graph_{'_'.join(app_name.split('.'))}")
         self.unique_activity_ids = set()  # Track unique activity IDs
         self.is_debug = True
         self.patch_size = 28  # Size of the patches to extract from screenshots
@@ -173,7 +119,8 @@ class GUIEmbedder:
                 transforms.ToTensor(),  # Converts to (C, H, W), values [0,1]
             ]
         )
-        
+        self.system_vector_tensors = []
+        self.system_possible_actions = []
 
     @torch.no_grad()
     def _get_text_embedding(self, text: str, dimension: int) -> torch.Tensor:
@@ -201,7 +148,9 @@ class GUIEmbedder:
     def _extract_text_embeddings(self, element):
         """Returns a consistent 48-dim embedding (32 from text, 16 from desc)."""
         # Reserve 48 dims and fill accordingly
-        out = torch.zeros(self.eltext_embedding_dim + self.eldesc_embedding_dim, dtype=torch.float32)
+        out = torch.zeros(
+            self.eltext_embedding_dim + self.eldesc_embedding_dim, dtype=torch.float32
+        )
         text = (
             element.get("text", "") or element.get("name", "")
             if element.tag != "EditText"
@@ -210,24 +159,27 @@ class GUIEmbedder:
         desc = element.get("content-desc", "") or element.get("contentDescription", "")
         if text.strip():
             emb_text = self._get_text_embedding(text, self.eltext_embedding_dim)
-            out[:self.eltext_embedding_dim] = emb_text
+            out[: self.eltext_embedding_dim] = emb_text
         if desc.strip():
             emb_desc = self._get_text_embedding(desc, self.eldesc_embedding_dim)
-            out[self.eltext_embedding_dim : self.eltext_embedding_dim + self.eldesc_embedding_dim] = emb_desc
+            out[
+                self.eltext_embedding_dim : self.eltext_embedding_dim
+                + self.eldesc_embedding_dim
+            ] = emb_desc
         return out, [text, desc]
 
     def hash_(self, text: str) -> float:
         h = hashlib.md5(text.encode()).hexdigest()
         return h
 
-    def _input_type_vector(self, element) -> list:
+    def _input_type_vector(self, element) :
         """Extract input type information for EditText elements."""
         element_type = element.get("class", "") or element.get("className", "")
         if "EditText" in element_type:
             input_type_keys = list(self.input_type_keys.keys())
             input_type_value = element.get("inputType", "x")
             return [int(input_type_value == k) for k in input_type_keys]
-        return [0] * len(self.input_type_keys)  # No input type
+        return [0] * len(self.input_type_keys)  # No input type [1,0,0] [0, 0, 0] [0,1,0]
 
     def _extract_position(
         self, bounds_str: str, screen_width: int, screen_height: int
@@ -263,7 +215,7 @@ class GUIEmbedder:
 
         return [0] * 6, [0.0] * 6
 
-    def _create_action_vector(self, input_type_vector: list, element, screen_rotation):
+    def _create_action_vector(self, input_type_vector: list, element):
         """Create action vector from multiple action event and input type vectors."""
         action_vector = [0] * len(self.action_types)
         # Element event handling capabilities (5 values)
@@ -279,11 +231,13 @@ class GUIEmbedder:
         ]
 
         scroll_direction_vector = [
-            int(element.tag == "ScrollView"),
-            int(element.tag == "HorizontalScrollView"),
-            int(element.tag == "RecyclerView"),
-            int(element.tag == "ListView"),
+            int("ScrollView" in (element.get("class", "") or element.get("className", ""))),
+            int("HorizontalScrollView" in (element.get("class", "") or element.get("className", ""))),
+            int("RecyclerView" in (element.get("class", "") or element.get("className", ""))),
+            int("ListView" in (element.get("class", "") or element.get("className", ""))),
         ]
+
+        is_edit_text = "EditText" in (element.get("class", "") or element.get("className", ""))
 
         # Correlate action event vector with action types
         if action_event_vector[0]:  # clickable
@@ -301,25 +255,25 @@ class GUIEmbedder:
             if scroll_direction_vector[1]:  # Horizontal scroll
                 action_vector[self.action_types["scroll_left"]] = 1
                 action_vector[self.action_types["scroll_right"]] = 1
-        if screen_rotation == 0 or screen_rotation == 2:  # Portrait and revPotrait mode
-            action_vector[self.action_types["rotate_landscape"]] = 1
-        if (
-            screen_rotation == 1 or screen_rotation == 3
-        ):  # Landscape and revLandscape mode
-            action_vector[self.action_types["rotate_potrait"]] = 1
         if action_event_vector[3]:  # checkable
             action_vector[self.action_types["click"]] = 1
         # if action_event_vector[4]:  # context-clickable
         #     action_vector[self.action_types["context_click"]] = 1
         #     pass
-        if input_type_vector[1]:  # text input
+        if input_type_vector[1] or input_type_vector[2] or is_edit_text:  # text input
             action_vector[self.action_types["edit_text"]] = 1
-        if input_type_vector[2]:
             action_vector[self.action_types["edit_number"]] = 1
-        action_vector[self.action_types["back"]] = 1
-
+        
         return action_vector
 
+    def action_vector_to_str(self, action_vector: list) -> str:
+        """Convert action vector to a human-readable string."""
+        actions = []
+        for action, idx in self.action_types.items():
+            if action_vector[idx] == 1:
+                actions.append(action)
+        return ", ".join(actions) if actions else "none"
+    
     def _extract_ui_patches(self, screenshot: Image.Image, patch_size=28):
         W, H = screenshot.size
         w_steps = W // patch_size
@@ -451,7 +405,6 @@ class GUIEmbedder:
             # Extract screen properties
             screen_width = int(root.get("width", "720"))
             screen_height = int(root.get("height", "1080"))
-            screen_rotation = int(root.get("rotation", "0"))
             root_type = root.get("class", "") or root.get("className", "")
             root_id = root.get("resource-id", "") or root.get("resourceId", "")
             activity_id_hash = self.hash_(root_id + root_type + current_activity)
@@ -464,7 +417,9 @@ class GUIEmbedder:
                     activity_id_hash,
                     type="previous_state_of_activity",
                     action=[-1] * len(self.action_types),  # -1
-                    action_space=torch.tensor([-1] * self.action_space_dim,dtype=torch.float32)
+                    action_space=torch.tensor(
+                        [-1] * self.action_space_dim, dtype=torch.float32
+                    ),
                 )
 
             self.logger.debug(
@@ -522,6 +477,9 @@ class GUIEmbedder:
                     # )
                     patch_tensor = self.img_to_tensor(patch_img)
                     patch_tensors.append(((x0, y0), patch_tensor))
+            else:
+                self.logger.warning("No screenshot provided, using empty patches.")
+                patch_tensors = [((0, 0), torch.zeros((3, self.patch_size, self.patch_size)))]
 
             for i, element in enumerate(interactive_elements):
                 # Element identification
@@ -550,8 +508,15 @@ class GUIEmbedder:
                 input_type_vector = self._input_type_vector(element)
                 text_vector_embedding, text_raw = self._extract_text_embeddings(element)
                 action_vector = self._create_action_vector(
-                    input_type_vector, element, screen_rotation
+                    input_type_vector, element
                 )
+
+                input_type_raw = "none"
+                try:
+                    if 1 in input_type_vector:
+                        input_type_raw = self.input_type_keys[str(input_type_vector.index(1))]
+                except (ValueError, KeyError):
+                    input_type_raw = "none"
 
                 action_can_be_performed = {
                     "id_hash": element_identifier_hash,
@@ -562,7 +527,8 @@ class GUIEmbedder:
                     "screen_size": [screen_width, screen_height],
                     "actions": action_vector,  # 1hot, what action can be performed
                     "status": status_vector,  # 1hot
-                    "input_type": input_type_vector,  # 1hot
+                    "text_raw": text_raw,
+                    "input_type_raw": input_type_raw,  # str
                 }
                 possible_actions.append(action_can_be_performed)
 
@@ -601,7 +567,7 @@ class GUIEmbedder:
                     vis_embeddings = self.visual_encoder(
                         patch_tensor.unsqueeze(0).to(device)
                     )
-                    self.logger.warning(f"Patch tensor shape: {vis_embeddings.shape}")
+                    #self.logger.warning(f"Patch tensor shape: {vis_embeddings.shape}")
                     vis_embeddings = vis_embeddings.squeeze(0)
                     vis_embeddings = vis_embeddings.detach()
 
@@ -642,8 +608,10 @@ class GUIEmbedder:
                         activity_id_hash,
                         element_identifier_hash,
                         type="child_of_activity",
-                        action=[-1]* len(self.action_types),  # -1
-                        action_space=torch.tensor(([-1] * self.action_space_dim),dtype=torch.float32),  # -1
+                        action=[-1] * len(self.action_types),  # -1
+                        action_space=torch.tensor(
+                            ([-1] * self.action_space_dim), dtype=torch.float32
+                        ),  # -1
                     )
                 if prev_elm_id_hash is not None and not self.graph.has_edge(
                     prev_elm_id_hash, element_identifier_hash
@@ -667,8 +635,24 @@ class GUIEmbedder:
                 #             inf_log.write(
                 #                 "\n\n================== EO XML =====================\n\n"
                 #             )
-
-            action_space_vector_tensor = torch.stack(element_vector_tensors, dim=0)
+            ###########################
+            # ADD SYSTEM ACTIONS
+            ###########################
+            self.get_system_action_space()
+            element_vector_tensors.extend(
+                self.system_vector_tensors
+            )  # Add system actions to the action space
+            possible_actions.extend(self.system_possible_actions)
+            #############################
+            # STACK TO ACTION SPACE VECTOR TENSOR
+            #############################
+            action_space_vector_tensor = (
+                torch.stack(element_vector_tensors, dim=0)
+                if element_vector_tensors
+                else torch.zeros(
+                    (0, self.state_dim), dtype=torch.float32, device=device
+                ).unsqueeze(0)
+            )
             self.logger.debug(
                 f"Action space vector shape: {action_space_vector_tensor.shape}"
             )
@@ -685,6 +669,96 @@ class GUIEmbedder:
             # Return values consistent with normal return type
             self.logger.error(traceback.print_exc())
             return 0, torch.zeros(self.state_dim), [], torch.zeros(self.vis_dim)
+
+    def get_system_action_space(self):
+        if len(self.system_vector_tensors) != 0 or len(self.system_possible_actions) != 0:
+            return  # system actions already generated
+
+        back_action_space, back_action = self.gen_system_action("back")
+        rotate_landscape_action_space, rotate_landscape_action = self.gen_system_action("rotate_landscape")
+        rotate_portrait_action_space, rotate_portrait_action = self.gen_system_action("rotate_portrait")
+        volume_up_action_space, volume_up_action = self.gen_system_action("volume_up")
+        volume_down_action_space, volume_down_action = self.gen_system_action("volume_down")
+        
+        # Add back option to action space - prevent no action space
+        self.system_vector_tensors.append(back_action_space)
+        self.system_possible_actions.append(back_action)
+        # Add rotate_landscape option to action space
+        self.system_vector_tensors.append(rotate_landscape_action_space)
+        self.system_possible_actions.append(rotate_landscape_action)
+        # Add rotate_portrait option to action space
+        self.system_vector_tensors.append(rotate_portrait_action_space)
+        self.system_possible_actions.append(rotate_portrait_action)
+        # Add volume_up option to action space
+        self.system_vector_tensors.append(volume_up_action_space)
+        self.system_possible_actions.append(volume_up_action)
+        # Add volume_down option to action space
+        self.system_vector_tensors.append(volume_down_action_space)
+        self.system_possible_actions.append(volume_down_action)
+
+        self.logger.debug(
+            f"System action space generated: \n\n======\n\n{self.system_vector_tensors}"
+        )
+        self.logger.debug(
+            f"System possible actions generated: \n\n======\n\n{self.system_possible_actions}"
+        )
+
+    def gen_system_action(self, action_name):
+        """
+        Generate a system action based on the given action name.
+        """
+        sys_act_str = "back_action"
+        sys_act_type = "back"
+        if action_name == "back":
+            sys_act_str = "back_action"
+            sys_act_type = "back"
+        elif action_name == "rotate_landscape":
+            sys_act_str = "rotate_landscape_action"
+            sys_act_type = "rotate_landscape"
+        elif action_name == "rotate_portrait":
+            sys_act_str = "rotate_portrait_action"
+            sys_act_type = "rotate_portrait"
+        elif action_name == "volume_up":
+            sys_act_str = "volume_up_action"
+            sys_act_type = "volume_up"
+        elif action_name == "volume_down":
+            sys_act_str = "volume_down_action"
+            sys_act_type = "volume_down"
+
+        hash_ = str(self.hash_(sys_act_str))
+        sys_action_vector = [0] * len(self.action_types)
+        sys_action_vector[self.action_types[sys_act_type]] = 1
+        sys_action_space_vector_tensor = torch.tensor(
+            torch.cat(
+                (
+                    torch.tensor(
+                        [int(hash_, 16) / float(2**192)]
+                        + sys_action_vector
+                        + [1, 0, 0]
+                        + [0] * len(self.input_type_keys),  # No input type,
+                        dtype=torch.float32,
+                    ),
+                    torch.tensor([0]*6,dtype=torch.float32),  # Position
+                    self._get_text_embedding(sys_act_str, self.eltext_embedding_dim+ self.eldesc_embedding_dim),
+                    torch.tensor([0]*(self.vis_dim),dtype=torch.float32),
+                ), dim=0
+            )
+        )
+
+        sys_action = (
+            {
+                "id_hash": hash_,
+                "type": sys_act_type,
+                "resource_id":  sys_act_str,
+                "position": [0]*6,
+                "position_norm": [0.0] * 6,
+                "screen_size": [0,0],
+                "actions": sys_action_vector,  # Only sys action
+                "status": [1, 0, 0],  # Enabled, not checked, not password
+                "input_type": [0] * len(self.input_type_keys),
+            }
+        )
+        return sys_action_space_vector_tensor, sys_action
 
     def save_patch_reps(self, reps, file_path="patch_reps.txt"):
         with open(file_path, "w", encoding="utf-8") as f:
@@ -717,7 +791,6 @@ class GUIEmbedder:
             arrows=True,
         )
 
-        plt.tight_layout()
         plt.savefig(f"{self.log_dir}/graph_test.png", dpi=300)
         plt.close()
 

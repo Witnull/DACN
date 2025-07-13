@@ -94,29 +94,29 @@ class DuelingDQN(nn.Module):
 
     def forward(self, state_tensor, action_space_tensor, actions: torch.Tensor):
         try:
-            print("actions.shape:", actions.shape)
+            #print("actions.shape:", actions.shape)
             # state_tensor: [1, S], action_space_tensor: [n, A], actions: [n, action_dim]
             n = action_space_tensor.size(0)
             state_expanded = state_tensor.expand(n, -1)  # [n, S]
             combined = torch.cat((state_expanded, action_space_tensor), dim=1)  # [n, S+A]
-            print("combined.shape:", combined.shape)
+            #print("combined.shape:", combined.shape)
             features = self.feature(combined)  # [n, feature_dim]
-            print("features.shape:", features.shape)
+            #print("features.shape:", features.shape)
             # State value head
             v_input = torch.cat((features, state_expanded), dim=1)  # [n, feature+S]
-            print("estimator1_input (v_input).shape:", v_input.shape)
+            #print("estimator1_input (v_input).shape:", v_input.shape)
             v = self.estimator1(v_input)  # [n, estimator_out]
-            print("v.shape:", v.shape)
+            #print("v.shape:", v.shape)
             # Advantage head
             a_input = torch.cat((features, action_space_tensor), dim=1)  # [n, feature+A]
-            print("estimator2_input (a_input).shape:", a_input.shape)
+            #print("estimator2_input (a_input).shape:", a_input.shape)
             a = self.estimator2(a_input)  # [n, estimator_out]
-            print("a.shape:", a.shape)
+            #print("a.shape:", a.shape)
             # Combine with one‐hot action encoding
             q_input = torch.cat(
                 (actions, v, a), dim=1
             )  # [n, action_tensor_dim + 2*estimator_out]
-            print("q_input.shape:", q_input.shape)
+            #print("q_input.shape:", q_input.shape)
             q = self.q_val_calc(q_input).squeeze(1)  # [n]
 
             return q
@@ -127,7 +127,7 @@ class DuelingDQN(nn.Module):
 
 class EventSelector:
     def __init__(
-        self, log_func, tau=0.03, epsilon_start=0.9, epsilon_end=0.3, epsilon_steps=1000
+        self, log_func, tau=0.03, epsilon_start=0.9, epsilon_end=0.3, epsilon_steps=2000
     ):
         self.logger = log_func
         self.tau = tau  # lower tau, pay more attention to the UI
@@ -228,22 +228,22 @@ class PrioritizedReplayBuffer:
                 val = x
             return f"{name}=[{summary}] → {val}"
 
-        # Usage
-        self.logger.warning(
-            info(state, "state")
-            + ", "
-            + info(widget_action_state, "widget_act")
-            + ", "
-            + info(action, "action")
-            + ", "
-            + info(reward, "reward")
-            + ", "
-            + info(next_state, "next_state")
-            + ", "
-            + info(next_widget_action_state, "next_widget_act")
-            + ", "
-            + info(done, "done")
-        )
+        # # Usage
+        # self.logger.warning(
+        #     info(state, "state")
+        #     + ", "
+        #     + info(widget_action_state, "widget_act")
+        #     + ", "
+        #     + info(action, "action")
+        #     + ", "
+        #     + info(reward, "reward")
+        #     + ", "
+        #     + info(next_state, "next_state")
+        #     + ", "
+        #     + info(next_widget_action_state, "next_widget_act")
+        #     + ", "
+        #     + info(done, "done")
+        # )
 
         self.priorities.append(max_priority)
 
@@ -402,7 +402,7 @@ class DQNAgent:  # Adapter
 
         self.optimizer = optim.Adam(self.online_dqn.parameters(), lr=lr)
         self.loss_fn =  nn.SmoothL1Loss()
-        self.selector = EventSelector(self.logger,epsilon_steps=800)
+        self.selector = EventSelector(self.logger,epsilon_steps=2000)
         self.memory = PrioritizedReplayBuffer(self.logger, buffer_capacity)
         self.train_history = []  # Store history for analysis
 
@@ -417,49 +417,54 @@ class DQNAgent:  # Adapter
         action_dim = self.action_dim
 
         state_vector_tensor = state_vector_tensor.to(device)
-        widget_actions_vector_tensor_expanded = []
-        _action_vectors_1hot = []
+        widget_action_space_vector_tensor_matrix = []
+        _action_vectors_1hot_matrix = []
+
         for idx, action_dict in enumerate(possible_actions):
-            action_vec = action_dict.get("actions", [])
-            corr_widget_actions_vector_tensor = widget_actions_vector_tensor[idx]
+            action_vec = action_dict.get("actions", [])  # multi-hot list of 0/1
+            action_type = action_dict.get("type", "unknown")
+            _widget_action_space_vector_tensor = widget_actions_vector_tensor[idx]
 
-            for action_idx in range(action_dim):
-                if action_idx in action_vec:
-                    one_hot = [0] * (action_dim + 1)
-                    # +1 for the index of the action in the action space
-                    one_hot[-1] = idx  # last element is the action index
-                    one_hot[action_idx] = 1
-                    _action_vectors_1hot.append(
-                        torch.tensor(one_hot, dtype=torch.float32)
-                    )
-                    widget_actions_vector_tensor_expanded.append(
-                        corr_widget_actions_vector_tensor
-                    )
+            # Get indices where action_vec is 1 (more efficient than checking each range)
+            action_indices = [i for i, v in enumerate(action_vec) if v == 1]
 
-        corr_widget_actions_vector_tensor_expanded_tensor = torch.stack(
-            widget_actions_vector_tensor_expanded
+            for action_idx in action_indices:
+                print(f"Action vector: {action_vec} for idx: {idx}, type: {action_type}")
+
+                one_hot = torch.zeros(action_dim + 1, dtype=torch.float32)
+                one_hot[action_idx] = 1
+                one_hot[-1] = idx
+
+                _action_vectors_1hot_matrix.append(one_hot)
+                widget_action_space_vector_tensor_matrix.append(_widget_action_space_vector_tensor)
+
+        corr_widget_action_space_vector_tensor_matrix_tensor = torch.stack(
+            widget_action_space_vector_tensor_matrix
         ).to(device)
-        action_vectors_tensor = torch.stack(_action_vectors_1hot, dim=0)
+        action_vectors_tensor = torch.stack(_action_vectors_1hot_matrix, dim=0)
 
-        print(
-            f"action_vectors_tensor.shape: {action_vectors_tensor.shape}, corr_widget_actions_vector_tensor_expanded_tensor.shape: {corr_widget_actions_vector_tensor_expanded_tensor.shape}"
+        self.logger.warning(
+            f"action_vectors_tensor.shape: {action_vectors_tensor.shape}, corr_widget_action_space_vector_tensor_matrix_tensor.shape: {corr_widget_action_space_vector_tensor_matrix_tensor.shape}"
+        )
+        self.logger.warning(
+            f"\n ==== CORR ===\n{corr_widget_action_space_vector_tensor_matrix_tensor}\n\n ==== ACTIONS ===\n{action_vectors_tensor}\n\n"
         )
 
         selector_action_idx = self.selector.select_event(
             dqn=self.online_dqn,
             state_tensor=state_vector_tensor,
-            action_tensors=corr_widget_actions_vector_tensor_expanded_tensor,
+            action_tensors=corr_widget_action_space_vector_tensor_matrix_tensor,
             actions=action_vectors_tensor,
         )
 
-        widget_action_idx = _action_vectors_1hot[selector_action_idx][-1]
-        _1hot_action_vec = _action_vectors_1hot[selector_action_idx][:-1]
+        widget_action_idx = _action_vectors_1hot_matrix[selector_action_idx][-1]
+        _1hot_action_vec = _action_vectors_1hot_matrix[selector_action_idx][:-1]
         self.logger.info(
             f"Selected action index: {widget_action_idx}, widget action index: {_1hot_action_vec}-{len(_1hot_action_vec)}"
         )
         return int(widget_action_idx), _1hot_action_vec.tolist()
 
-    def train_replay(self):
+    def train_replay(self, repeat=50, clip_target=True, target_clip_value=25.0):
         if len(self.memory.buffer) < self.batch_size:
             return
 
@@ -479,7 +484,7 @@ class DQNAgent:  # Adapter
             weights,
         ) = samples
 
-        # ===== Ensure all tensors are on the correct device =====
+        # Move to device
         states = states.to(device)
         widget_action_state = widget_action_state.to(device)
         actions = actions.to(device)
@@ -489,39 +494,48 @@ class DQNAgent:  # Adapter
         dones = dones.to(device)
         weights = weights.to(device)
 
-        with torch.no_grad():
-            # 1. Compute Q-values for next states using online DQN
-            next_q_online = self.online_dqn(next_states, next_widget_action_state, actions)  # [batch_size]
-            # Find best actions from online network
-            best_action_idxs = next_q_online.argmax(dim=0)  # index of best action per batch
+        for _ in range(repeat):
+            with torch.no_grad():
+                # Compute Q-values for next states using online DQN
+                next_q_online = self.online_dqn(next_states, next_widget_action_state, actions)
+                best_action_idxs = next_q_online.argmax(dim=0)
 
-            # 2. Evaluate using target DQN
-            next_q_target_all = self.target_dqn(next_states, next_widget_action_state, actions)  # [batch_size]
-            max_next_q = next_q_target_all[best_action_idxs].unsqueeze(0)  # gather best target Qs
+                # Evaluate best action Q using target DQN
+                next_q_target_all = self.target_dqn(next_states, next_widget_action_state, actions)
+                max_next_q = next_q_target_all[best_action_idxs]
 
-            # 3. Bellman target
-            targets = rewards.unsqueeze(1) + (1 - dones.unsqueeze(1)) * self.gamma * max_next_q
+                targets = rewards.unsqueeze(1) + (1 - dones.unsqueeze(1)) * self.gamma * max_next_q
 
+                if clip_target:
+                    targets = torch.clamp(targets, min=-target_clip_value, max=target_clip_value)
 
-        current_q = self.online_dqn(states, widget_action_state, actions).to(device)
-        if current_q.dim() == 1:
-            current_q = current_q.unsqueeze(1)
+            current_q = self.online_dqn(states, widget_action_state, actions)
 
-        td_errors = (current_q - targets).pow(2).squeeze(1)
-        loss = (weights * td_errors).mean()
+            if current_q.dim() == 1:
+                current_q = current_q.unsqueeze(1)
 
-        self.optimizer.zero_grad()
-        loss.backward()
-        self.logger.warning(f"Train Loss: {str(loss.cpu().item())} | Temporal Difference: {str(td_errors.mean().cpu().item())}")
-        self.train_history.append((loss.cpu().item(), td_errors.mean().cpu().item()))
-        # Optional gradient clipping:
-        torch.nn.utils.clip_grad_norm_(self.online_dqn.parameters(), max_norm=10.0)
-        self.optimizer.step()
+            td_errors = (current_q - targets).pow(2).squeeze(1)
+            loss = (weights * td_errors).mean()
 
-        new_priorities = torch.abs(current_q - targets).squeeze(1).detach().cpu().numpy()
-        self.memory.update_priorities(indices, new_priorities)
+            self.optimizer.zero_grad()
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(self.online_dqn.parameters(), max_norm=10.0)
+            self.optimizer.step()
 
+            # Log only final pass
+            if _ == repeat - 1:
+                self.logger.warning(
+                    f"Train Loss: {loss.item():.3f} | TD Error: {td_errors.mean().item():.3f}"
+                )
+                self.train_history.append((loss.item(), td_errors.mean().item()))
+
+            # Update PER priorities
+            new_priorities = torch.abs(current_q - targets).squeeze(1).detach().cpu().numpy()
+            self.memory.update_priorities(indices, new_priorities)
+
+        # Soft update once after all repeats
         self.soft_update()
+
 
     def save_training_history(self, path="train_history.csv"):
         try:

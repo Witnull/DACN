@@ -488,7 +488,7 @@ class StateEmbedder:
             activity_id_hash: Hash of the current activity
             action_space_vector_tensor: Tensor containing widget action vectors
             max_nodes: Maximum number of nodes to include in the graph
-            model_type: Type of model to use ("gin" or "gatv2")
+            model_type: Type of model to use ("gin", "gine" or "gatv2")
 
         Returns:
             State vector tensor with shape (1, out_channels)

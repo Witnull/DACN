@@ -47,32 +47,44 @@ class LogcatExtractor:
             "logcat",
             "-c",
         ]
-        self.logger.info(
-            f"Clearing logcat buffers for {self.app_name} on {self.device_udid}"
-        )
+        # self.logger.info(
+        #     f"Clearing logcat buffers for {self.app_name} on {self.device_udid}"
+        # )
         result = subprocess.run(cmd, capture_output=True, text=True)
         return result.returncode == 0
-    
+
     def dump_logcat(self):
         cmd = [
             self.adb_path,
-            "-s", self.device_udid,
+            "-s",
+            self.device_udid,
             "logcat",
-            "-b", "main",
-            "-b", "crash",
-            "-d"
+            "-b",
+            "main",
+            "-b",
+            "crash",
+            "-d",
         ]
 
         raw_result = subprocess.run(cmd, capture_output=True, text=True)
-        result = "\n".join(line for line in raw_result.stdout.splitlines() if "appium" not in line.lower())
-        self.logger.info(
-            f"Dumped logcat for {self.app_name} on {self.device_udid}, size: {len(result)} bytes"
+        if not raw_result.stdout:
+            self.logger.warning(
+                f"No logcat output for {self.app_name} on {self.device_udid}. "
+            )
+            return ""
+        result = "\n".join(
+            line
+            for line in raw_result.stdout.splitlines()
+            if "appium" not in line.lower()
         )
+        # self.logger.info(
+        #    f"Dumped logcat for {self.app_name} on {self.device_udid}, size: {len(result)} bytes"
+        # )
         # Save the log to a file
         self.save_log(result)
         return result.strip()
 
-    def extract_crash_logs(self, log):
+    def extract_logs(self, log):
         crash_patterns = [
             "FATAL EXCEPTION",
             "ANR in",
@@ -86,11 +98,16 @@ class LogcatExtractor:
             "Error",
         ]
         crash_logs = []
+        if not log:
+            self.logger.warning("No log data available for crash extraction.")
+            return crash_logs
         for line in log.splitlines():
             if any(
                 re.search(pattern.lower(), line.lower()) for pattern in crash_patterns
             ):
-                line = ' '.join(line.split(":")[-2:]).strip()  # Remove timestamp and tag
+                line = " ".join(
+                    line.split(":")[-2:]
+                ).strip()  # Remove timestamp and tag
                 crash_logs.append(line)
         self.save_crash_log(crash_logs)
         return crash_logs
@@ -100,7 +117,9 @@ class LogcatExtractor:
         coverage_lines = []
         total_covered = 0
         total_possible = 0
-
+        if not log:
+            self.logger.warning("No log data available for ACV coverage extraction.")
+            return 0.0
         for line in log.splitlines():
             if "ACV" in line and "covered" in line:
                 match = acv_pattern.search(line)
@@ -112,11 +131,9 @@ class LogcatExtractor:
                     total_covered += covered
                     total_possible += possible
 
-        total_percent = (
-            (total_covered / total_possible) if total_possible else 0.0
-        )
+        total_percent = (total_covered / total_possible) if total_possible else 0.0
         coverage_lines.append(
-            f"\nTotal coverage: {total_covered} / {total_possible} --> {total_percent*100:.2f}%"
+            f"\nTotal coverage: {total_covered} / {total_possible} --> {total_percent * 100:.2f}%"
         )
         self.save_coverage_log(coverage_lines)
         return total_percent

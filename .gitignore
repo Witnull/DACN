@@ -16,3 +16,4 @@ apk
 .vscode
 ui_test
 results/*
+*.7z
