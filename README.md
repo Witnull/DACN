@@ -4,7 +4,9 @@
 
 An automated mobile application testing framework combining Deep Q-Learning with GINE for graph feature extraction and CNN for Image patching for efficient test action selection and execution. This model is inspired by the paper [Deep Reinforcement Learning for Automated Android GUI Testing](https://dl.acm.org/doi/10.1145/3597503.3623344)
 
-![Workflow Overview](asset/images/model_wf_gen.png)
+<p align="center">
+  <img src="asset/images/model_wf_gen.png" width="800" alt="Workflow Overview">
+</p>
 
 ## 🛠️ Dependencies & Environment
 
@@ -87,12 +89,18 @@ Each app is given 2 hrs per test model.
 
 ### 📊 Coverage Results:
 
-![Results](asset/images/Cov_res.png)
+<p align="center">
+  <img src="asset/images/Cov_res.png" width="800" alt="Coverage Results">
+</p>
 
 #### 🐛 Bug found by our model:
 
-![Bug List](asset/images/errfound.png)
-![Bug List](asset/images/err_types.png)
+<p align="center">
+  <img src="asset/images/errfound.png" width="800" alt="Bug List">
+</p>
+<p align="center">
+  <img src="asset/images/err_types.png" width="800" alt="Bug Types">
+</p>
 
 ## 📚 References
 
@@ -107,16 +115,41 @@ Each app is given 2 hrs per test model.
 - [UI/Application Exerciser Monkey](https://developer.android.com/studio/test/other-testing-tools/monkey)
 
 ---
-## Images
+
+## 🖼️ Images
+
 ### Full workflow
-![Full workflow](asset/images/model_full_wf.png)
+
+<p align="center">
+  <img src="asset/images/model_full_wf.png" width="800" alt="Full workflow">
+</p>
+
 ### Process APKs
-![Process API](asset/images/process_apk.png)
+
+<p align="center">
+  <img src="asset/images/process_apk.png" width="800" alt="Process APKs">
+</p>
+
 ### GUI Embedder
-![GUI Embedding](asset/images/guiem_wf.png)
+
+<p align="center">
+  <img src="asset/images/guiem_wf.png" width="800" alt="GUI Embedding">
+</p>
+
 ### State Embedder
-![State Embedding](asset/images/stateem_wf.png)
+
+<p align="center">
+  <img src="asset/images/stateem_wf.png" width="800" alt="State Embedding">
+</p>
+
 ### DQN Model
-![DQN Model](asset/images/dqna_wf.png)
+
+<p align="center">
+  <img src="asset/images/dqna_wf.png" width="800" alt="DQN Model">
+</p>
+
 ### Environment
-![Environment](asset/images/env_wf.png)
+
+<p align="center">
+  <img src="asset/images/env_wf.png" width="800" alt="Environment">
+</p>
