@@ -8,6 +8,9 @@ An automated mobile application testing framework combining Deep Q-Learning with
   <img src="asset/images/model_wf_gen.png" width="500" alt="Workflow Overview">
 </p>
 
+## Member:
+- Hồ Vĩnh Nhật - 22521013
+- Trần Nguyễn Tiến Thành - 22521364
 ## 🛠️ Dependencies & Environment
 
 **Core Requirements**:
