@@ -61,6 +61,78 @@ Then run to begin the test:
 python ./main.py -t <minutes>
 ```
 
+## 📁 Project Structure
+
+```
+DACN/
+├── main.py                     # Main entry point for running tests
+├── requirements.txt            # Python dependencies
+├── README.md                   # Project documentation
+├── .gitignore                  # Git ignore rules
+│
+├── apk/                       # APK collection
+│   ├── app-*.apk              # Various application APKs
+│   ├── com.github.libretube_62.apk
+│   ├── NewPipe_v0.27.7.apk
+│   ├── Seal-1.13.1-universal-release.apk
+│   ├── instr/                 # Instrumented APKs directory
+│
+├── asset/                      # Documentation and demo assets
+│   ├── images/                # Screenshots and workflow diagrams
+│   ├── Demo_our.webm          # Project demonstration video
+│   ├── test_model_3mins.csv   # Test results data
+│   ├── ComparisonTools.xlsx   # Performance comparison data
+│   └── *.pdf                  # Research papers and documentation
+│
+├── experiments/                # Core framework implementation
+│   ├── duel_dqn_agent.py      # Double-Dueling DQN agent implementation
+│   ├── gui_embedder.py        # GUI state feature extraction (GNN + CNN)
+│   ├── state_embedder.py      # State representation and embedding
+│   ├── env_handler.py         # Environment management and interaction
+│   ├── testing_controller.py  # Main testing orchestration
+│   ├── reward_analyzer.py     # Reward calculation and analysis
+│   ├── input_inference.py     # SLM-based input generation
+│   ├── logcat_extractor.py    # Android log parsing and analysis
+│   ├── logger.py              # Logging utilities
+│   └── utils/                 # Helper functions and utilities
+│
+├── external_tools/             # Third-party tools and dependencies
+│   ├── apktool_2.11.1.jar     # APK decompilation tool
+│   ├── ACVPatcher-windows/    # Android Code Coverage Patcher
+│   └── jdk-17.0.12_windows-x64_bin/ # Java Development Kit
+│
+├── Logs/                       # Test execution logs and results
+│   └── avd003_pfa-notes-*/    # Timestamped test session logs
+│
+├── venv/                       # Python virtual environment
+```
+
+### 📋 Key Components Description
+
+**Core Framework (`experiments/`)**:
+
+- **DQN Agent**: Implements Double-Dueling Deep Q-Network for intelligent action selection
+- **GUI Embedder**: Extracts features from Android UI using Graph Neural Networks (GINEConv) for UI hierarchy and CNN for visual elements
+- **State Embedder**: Combines GUI features with application state for comprehensive representation
+- **Environment Handler**: Manages Android emulator, Appium server, and test execution environment
+- **Testing Controller**: Orchestrates the entire testing workflow and coordinates components
+
+**APK Management (`apk/`)**:
+
+- Collection of Android applications for testing
+- Instrumented versions for code coverage tracking
+- Sample applications from research datasets (AndroTest24, F-Droid)
+
+**External Tools (`external_tools/`)**:
+
+- **ACVTool**: Android Code Coverage instrumentation
+
+
+**Results (`Logs/`)**:
+
+- Test execution logs with timestamps
+- Coverage reports and performance metrics
+
 ## ⚙️ How It Works
 
 The framework operates in three main phases:
