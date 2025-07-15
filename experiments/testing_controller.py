@@ -128,6 +128,7 @@ class TestController:
         self.instr_cov = 0.0
         self.activity_cov = 0.0
         self.crash_or_error_logs = []
+        self.crash_or_error_logs_details = []  # format {"activity": "activity_name", action_taken : "click", element:"button id", element_text: "button", "error": "error_message"}
         self.episode = 0
         self.step = 0
 
@@ -337,7 +338,10 @@ class TestController:
                 )
                 self.logcat_extractor.clear_logcat()  # Clear logcat before each episode
 
-                if not self.appium_manager.driver or not self.appium_manager.driver.session_id:
+                if (
+                    not self.appium_manager.driver
+                    or not self.appium_manager.driver.session_id
+                ):
                     self.logger.error("Driver is not active")
                     self.appium_manager.restart_appium()
 
@@ -425,7 +429,9 @@ class TestController:
                         )
 
                     self.logger.debug(f"Activity ID hash: {activity_id_hash}")
-                    self.logger.info(f"Possible actions - Act Space: {len(possible_actions)} - {action_space_vector_tensor.shape}")
+                    self.logger.info(
+                        f"Possible actions - Act Space: {len(possible_actions)} - {action_space_vector_tensor.shape}"
+                    )
                     # self.logger.debug(possible_actions)
                     # self.logger.debug(action_space_vector_tensor)
                     conditioned_state = state_vector_tensor
@@ -564,6 +570,17 @@ class TestController:
                         for log in crash_or_error_logs:
                             if log not in self.crash_or_error_logs:
                                 self.crash_or_error_logs.append(log)
+                                self.crash_or_error_logs_details.append(
+                                    {
+                                        "activity": current_activity,
+                                        "action_taken": action_type,
+                                        "element": action_taken.get("type", "unknown"),
+                                        "element_text": action_taken.get(
+                                            "text_raw", "unknown"
+                                        ),
+                                        "log_partial": log,
+                                    }
+                                )
                                 self.logger.warning(
                                     f"Crash logs: {'\n###### CRASH/ERROR DETECTED #######\n'.join(crash_or_error_logs)}"
                                 )
@@ -631,7 +648,9 @@ class TestController:
                 # self.gui_embedder.graph_dataset_save()
                 self.dqn_agent.train_replay()
                 if episode % 2 == 0:
-                    threading.Thread(target=self.env_handler.save_coverage_report).start()
+                    threading.Thread(
+                        target=self.env_handler.save_coverage_report
+                    ).start()
                 self.save_testing_data(picked_actions)
                 self.save_to_txt(f"{eps_reward}\n", "episode_rewards.txt", "a")
 
@@ -678,16 +697,39 @@ class TestController:
                 }"
                 "\n========\n"
             )
-            self.logger.warning(
-                "\n\n====== CRASH/ERROR FOUND ========\n"
-                "\n========\n"
-                f"{
-                    '\n'.join(self.crash_or_error_logs)
-                    if self.crash_or_error_logs
-                    else 'No crash/error logs'
-                }"
-                "\n========\n"
-            )
+            if self.crash_or_error_logs:
+                self.logger.warning(
+                    "\n\n====== CRASH/ERROR FOUND ========\n\n========\n"
+                )
+                for i, log in enumerate(self.crash_or_error_logs):
+                    self.logger.warning(
+                        f"\nCrash/Error #{i + 1} ------------------------\n\n"
+                    )
+                    self.logger.warning(f"Log: {log}")
+                    if i < len(self.crash_or_error_logs_details):
+                        details = self.crash_or_error_logs_details[i]
+                        self.logger.warning(
+                            f"  Activity: {details.get('activity', 'unknown')}"
+                        )
+                        self.logger.warning(
+                            f"  Action Taken: {details.get('action_taken', 'unknown')}"
+                        )
+                        self.logger.warning(
+                            f"  Element: {details.get('element', 'unknown')}"
+                        )
+                        self.logger.warning(
+                            f"  Element Text: {details.get('element_text', 'unknown')}"
+                        )
+                    self.logger.warning("\n-------------------------\n")
+                self.logger.warning("\n========\n")
+            else:
+                self.logger.warning(
+                    "\n\n====== CRASH/ERROR FOUND ========\n"
+                    "\n========\n"
+                    "No crash/error logs"
+                    "\n========\n"
+                )
+
             self.env_handler.save_coverage_report()
             save_done = self.save_testing_data(picked_actions)
             time.sleep(35)  # Give some time for the app to stabilize before cleanup

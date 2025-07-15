@@ -53,6 +53,14 @@ export PATH="$PATH:$ANDROID_HOME/platform-tools"
 - Run Appium Doctor to verify setup
 - Install and setup [ACVTool](https://github.com/pilgun/acvtool)
 
+**Run Test**:
+Edit the `main.py` file to configure the test parameters/apks.
+Then run to begin the test:
+
+```bash
+python ./main.py -t <minutes>
+```
+
 ## ⚙️ How It Works
 
 The framework operates in three main phases:

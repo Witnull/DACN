@@ -12,7 +12,9 @@ external_tools/*
 wd 
 venv/
 apk
+apk2
 .vscode
 ui_test
 results/*
 *.7z
+*.zip
